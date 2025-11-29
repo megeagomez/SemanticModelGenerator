@@ -1,0 +1,39 @@
+table FactInternetSalesReason
+	lineageTag: 126bba98-f17e-449a-a6e1-a58d836a898b
+
+	column SalesOrderNumber
+		dataType: string
+		lineageTag: 3f36c8a5-a099-497c-b294-5ecfb9042c7e
+		summarizeBy: none
+		sourceColumn: SalesOrderNumber
+
+		annotation SummarizationSetBy = Automatic
+
+	column SalesOrderLineNumber
+		dataType: int64
+		formatString: 0
+		lineageTag: cedca5d7-674b-43f5-a6bb-bfe57c5682cb
+		summarizeBy: sum
+		sourceColumn: SalesOrderLineNumber
+
+		annotation SummarizationSetBy = Automatic
+
+	column SalesReasonKey
+		dataType: int64
+		formatString: 0
+		lineageTag: 8c21e61a-fd67-4613-ab06-a953da4a9c9c
+		summarizeBy: none
+		sourceColumn: SalesReasonKey
+
+		annotation SummarizationSetBy = Automatic
+
+	partition FactInternetSalesReason = m
+		mode: import
+		source =
+				let
+				    Origen = Sql.Databases("localhost"),
+				    AdventureWorksDW2022 = Origen{[Name="AdventureWorksDW2022"]}[Data],
+				    dbo_FactInternetSalesReason = AdventureWorksDW2022{[Schema="dbo",Item="FactInternetSalesReason"]}[Data]
+				in
+				    dbo_FactInternetSalesReason
+
