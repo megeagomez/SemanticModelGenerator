@@ -1,0 +1,66 @@
+table DimProductSubcategory
+	lineageTag: 61f4c48a-43dc-4399-b3bb-dc43abc526d7
+
+	column ProductSubcategoryKey
+		dataType: int64
+		formatString: 0
+		lineageTag: e8218d70-3f9b-4050-af6e-d95c4baf9c19
+		summarizeBy: none
+		sourceColumn: ProductSubcategoryKey
+
+		annotation SummarizationSetBy = Automatic
+
+	column ProductSubcategoryAlternateKey
+		dataType: int64
+		formatString: 0
+		lineageTag: e9664c83-4e79-408a-b21f-dcc36f0620fe
+		summarizeBy: count
+		sourceColumn: ProductSubcategoryAlternateKey
+
+		annotation SummarizationSetBy = Automatic
+
+	column EnglishProductSubcategoryName
+		dataType: string
+		lineageTag: c067e731-889f-4c06-a1c6-921a06eeffba
+		summarizeBy: none
+		sourceColumn: EnglishProductSubcategoryName
+
+		annotation SummarizationSetBy = Automatic
+
+	column SpanishProductSubcategoryName
+		dataType: string
+		lineageTag: 761c7044-8ff1-4ab3-924d-9a77cf82b569
+		summarizeBy: none
+		sourceColumn: SpanishProductSubcategoryName
+
+		annotation SummarizationSetBy = Automatic
+
+	column FrenchProductSubcategoryName
+		dataType: string
+		lineageTag: 59c8e74c-31e8-4187-9d95-e8e4e73acb8d
+		summarizeBy: none
+		sourceColumn: FrenchProductSubcategoryName
+
+		annotation SummarizationSetBy = Automatic
+
+	column ProductCategoryKey
+		dataType: int64
+		formatString: 0
+		lineageTag: 5bd68e8d-2138-4983-867a-e57481d0a2d6
+		summarizeBy: none
+		sourceColumn: ProductCategoryKey
+
+		annotation SummarizationSetBy = Automatic
+
+	partition DimProductSubcategory = m
+		mode: import
+		source =
+				let
+				    Origen = Sql.Databases("localhost"),
+				    AdventureWorksDW2022 = Origen{[Name="AdventureWorksDW2022"]}[Data],
+				    dbo_DimProductSubcategory = AdventureWorksDW2022{[Schema="dbo",Item="DimProductSubcategory"]}[Data]
+				in
+				    dbo_DimProductSubcategory
+
+	annotation PBI_ResultType = Table
+

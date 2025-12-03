@@ -1,0 +1,83 @@
+table FactSurveyResponse
+	lineageTag: 3000f43a-5341-4091-b6e8-c88d534ec1c1
+
+	column SurveyResponseKey
+		dataType: int64
+		formatString: 0
+		lineageTag: 0abbaeb8-8581-408d-88d5-aa997a40c224
+		summarizeBy: count
+		sourceColumn: SurveyResponseKey
+
+		annotation SummarizationSetBy = Automatic
+
+	column DateKey
+		dataType: int64
+		formatString: 0
+		lineageTag: 6237dd39-e1ee-4cd4-93b2-8aa41c546d92
+		summarizeBy: none
+		sourceColumn: DateKey
+
+		annotation SummarizationSetBy = Automatic
+
+	column CustomerKey
+		dataType: int64
+		formatString: 0
+		lineageTag: 944f0896-26a5-4189-966b-3631b0ca03df
+		summarizeBy: none
+		sourceColumn: CustomerKey
+
+		annotation SummarizationSetBy = Automatic
+
+	column ProductCategoryKey
+		dataType: int64
+		formatString: 0
+		lineageTag: 83b538c5-c4de-403e-a2f1-e9b03048cc2a
+		summarizeBy: count
+		sourceColumn: ProductCategoryKey
+
+		annotation SummarizationSetBy = Automatic
+
+	column EnglishProductCategoryName
+		dataType: string
+		lineageTag: b760e12f-562b-4dd8-99bd-f9d4951b16a6
+		summarizeBy: none
+		sourceColumn: EnglishProductCategoryName
+
+		annotation SummarizationSetBy = Automatic
+
+	column ProductSubcategoryKey
+		dataType: int64
+		formatString: 0
+		lineageTag: d0c773af-318f-4c91-b581-b6fe8c1e9b90
+		summarizeBy: count
+		sourceColumn: ProductSubcategoryKey
+
+		annotation SummarizationSetBy = Automatic
+
+	column EnglishProductSubcategoryName
+		dataType: string
+		lineageTag: 9dbe6817-6932-4445-b2b6-46ea26d9c3c0
+		summarizeBy: none
+		sourceColumn: EnglishProductSubcategoryName
+
+		annotation SummarizationSetBy = Automatic
+
+	column Date
+		dataType: dateTime
+		formatString: General Date
+		lineageTag: 2e563b57-3001-45c3-9b8e-908172e07d8d
+		summarizeBy: none
+		sourceColumn: Date
+
+		annotation SummarizationSetBy = Automatic
+
+	partition FactSurveyResponse = m
+		mode: import
+		source =
+				let
+				    Origen = Sql.Databases("localhost"),
+				    AdventureWorksDW2022 = Origen{[Name="AdventureWorksDW2022"]}[Data],
+				    dbo_FactSurveyResponse = AdventureWorksDW2022{[Schema="dbo",Item="FactSurveyResponse"]}[Data]
+				in
+				    dbo_FactSurveyResponse
+

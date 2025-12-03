@@ -1,0 +1,78 @@
+table FactSalesQuota
+	lineageTag: 0c2243c6-735b-4a05-8921-f57e0fe1c9b2
+
+	column SalesQuotaKey
+		dataType: int64
+		formatString: 0
+		lineageTag: 1783dca1-c6d4-4199-8f03-9012270440c3
+		summarizeBy: count
+		sourceColumn: SalesQuotaKey
+
+		annotation SummarizationSetBy = Automatic
+
+	column EmployeeKey
+		dataType: int64
+		formatString: 0
+		lineageTag: 637ea0fc-60ec-4324-8db2-15f7bde54415
+		summarizeBy: none
+		sourceColumn: EmployeeKey
+
+		annotation SummarizationSetBy = Automatic
+
+	column DateKey
+		dataType: int64
+		formatString: 0
+		lineageTag: 799b4ed4-206c-4116-b44a-e66e3ad994da
+		summarizeBy: none
+		sourceColumn: DateKey
+
+		annotation SummarizationSetBy = Automatic
+
+	column CalendarYear
+		dataType: int64
+		formatString: 0
+		lineageTag: f0da6d54-84b2-472a-bccb-f16a379d723a
+		summarizeBy: sum
+		sourceColumn: CalendarYear
+
+		annotation SummarizationSetBy = Automatic
+
+	column CalendarQuarter
+		dataType: int64
+		formatString: 0
+		lineageTag: 8dcb3690-3809-41ae-ae4b-8c1865fce134
+		summarizeBy: sum
+		sourceColumn: CalendarQuarter
+
+		annotation SummarizationSetBy = Automatic
+
+	column SalesAmountQuota
+		dataType: decimal
+		formatString: #,0.###############\ "€";-#,0.###############\ "€";#,0.###############\ "€"
+		lineageTag: dc929c29-cac2-4c72-b3b8-070a66fc917b
+		summarizeBy: sum
+		sourceColumn: SalesAmountQuota
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"currencyCulture":"es-ES"}
+
+	column Date
+		dataType: dateTime
+		formatString: General Date
+		lineageTag: 70255742-637e-4d7d-ad19-e2eb63695c76
+		summarizeBy: none
+		sourceColumn: Date
+
+		annotation SummarizationSetBy = Automatic
+
+	partition FactSalesQuota = m
+		mode: import
+		source =
+				let
+				    Origen = Sql.Databases("localhost"),
+				    AdventureWorksDW2022 = Origen{[Name="AdventureWorksDW2022"]}[Data],
+				    dbo_FactSalesQuota = AdventureWorksDW2022{[Schema="dbo",Item="FactSalesQuota"]}[Data]
+				in
+				    dbo_FactSalesQuota
+

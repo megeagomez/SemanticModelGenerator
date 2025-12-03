@@ -1,0 +1,126 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.4.0/schema.json",
+  "name": "72e250773208308a0cee",
+  "position": {
+    "x": 139.96616358732979,
+    "y": 34.305432251796518,
+    "z": 0,
+    "height": 345.79875709810887,
+    "width": 499.48709358615724
+  },
+  "visual": {
+    "visualType": "pivotTable",
+    "query": {
+      "queryState": {
+        "Rows": {
+          "projections": [
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "DimDate"
+                    }
+                  },
+                  "Property": "CalendarYear"
+                }
+              },
+              "queryRef": "DimDate.CalendarYear",
+              "nativeQueryRef": "Suma de CalendarYear",
+              "active": true
+            }
+          ]
+        },
+        "Values": {
+          "projections": [
+            {
+              "field": {
+                "Aggregation": {
+                  "Expression": {
+                    "Column": {
+                      "Expression": {
+                        "SourceRef": {
+                          "Entity": "FactInternetSales"
+                        }
+                      },
+                      "Property": "OrderQuantity"
+                    }
+                  },
+                  "Function": 0
+                }
+              },
+              "queryRef": "Sum(FactInternetSales.OrderQuantity)",
+              "nativeQueryRef": "Suma de OrderQuantity"
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "FactInternetSales"
+                    }
+                  },
+                  "Property": "OrderQty"
+                }
+              },
+              "queryRef": "FactInternetSales.OrderQty",
+              "nativeQueryRef": "OrderQty"
+            }
+          ]
+        }
+      }
+    },
+    "drillFilterOtherVisuals": true
+  },
+  "filterConfig": {
+    "filters": [
+      {
+        "name": "11bff99c03444d2d9032",
+        "field": {
+          "Aggregation": {
+            "Expression": {
+              "Column": {
+                "Expression": {
+                  "SourceRef": {
+                    "Entity": "FactInternetSales"
+                  }
+                },
+                "Property": "OrderQuantity"
+              }
+            },
+            "Function": 0
+          }
+        },
+        "type": "Advanced"
+      },
+      {
+        "name": "6fe7d42f10395788b1cb",
+        "field": {
+          "Column": {
+            "Expression": {
+              "SourceRef": {
+                "Entity": "DimDate"
+              }
+            },
+            "Property": "CalendarYear"
+          }
+        },
+        "type": "Advanced"
+      },
+      {
+        "name": "439cc8f1b06d05dca902",
+        "field": {
+          "Measure": {
+            "Expression": {
+              "SourceRef": {
+                "Entity": "FactInternetSales"
+              }
+            },
+            "Property": "OrderQty"
+          }
+        },
+        "type": "Advanced"
+      }
+    ]
+  }
+}
