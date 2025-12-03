@@ -1,0 +1,39 @@
+{
+  "name": "SimpleInternetSales.SemanticModel",
+  "base_model": "FullAdventureWorks.SemanticModel",
+  "initial_tables": [
+    {
+      "name": "FactInternetSales",
+      "search_direction": "ManyToOne"
+    }
+  ],
+  "included_tables": [
+    "DimCurrency",
+    "DimCustomer",
+    "DimDate",
+    "DimGeography",
+    "DimProduct",
+    "DimProductCategory",
+    "DimProductSubcategory",
+    "DimPromotion",
+    "DimSalesTerritory",
+    "FactInternetSales"
+  ],
+  "table_search_configs": {
+    "FactInternetSales": "ManyToOne",
+    "DimProduct": "ManyToOne",
+    "DimCustomer": "ManyToOne",
+    "DimPromotion": "ManyToOne",
+    "DimCurrency": "ManyToOne",
+    "DimDate": "ManyToOne",
+    "DimSalesTerritory": "ManyToOne",
+    "DimProductSubcategory": "ManyToOne",
+    "DimGeography": "ManyToOne",
+    "DimProductCategory": "ManyToOne"
+  },
+  "table_elements": {},
+  "total_tables": 10,
+  "recursive": true,
+  "max_depth": 5,
+  "creation_date": null
+}

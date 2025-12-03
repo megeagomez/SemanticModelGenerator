@@ -1,0 +1,78 @@
+relationship 7d64cdb9-fad5-45f2-8794-9366f149158c
+	fromColumn: FactInternetSales.CurrencyKey
+	toColumn: DimCurrency.CurrencyKey
+
+	annotation PBI_IsFromSource = FS
+
+
+relationship c79a882a-c4cb-4d1e-94d2-307e6452690b
+	fromColumn: FactInternetSales.CustomerKey
+	toColumn: DimCustomer.CustomerKey
+
+	annotation PBI_IsFromSource = FS
+
+
+relationship 79c2a914-b83a-422c-90b1-fbbda789da87
+	fromColumn: FactInternetSales.DueDateKey
+	toColumn: DimDate.DateKey
+
+	annotation PBI_IsFromSource = FS
+
+
+relationship 9f7867ba-275f-40ae-9d41-66e806ed9144
+	isActive: false
+	fromColumn: FactInternetSales.OrderDateKey
+	toColumn: DimDate.DateKey
+
+	annotation PBI_IsFromSource = FS
+
+
+relationship 0b349d20-cc4c-4710-900b-e11ef45617d8
+	isActive: false
+	fromColumn: FactInternetSales.ShipDateKey
+	toColumn: DimDate.DateKey
+
+	annotation PBI_IsFromSource = FS
+
+
+relationship e433a293-0217-4c96-a786-b6a98329d53b
+	fromColumn: FactInternetSales.ProductKey
+	toColumn: DimProduct.ProductKey
+
+	annotation PBI_IsFromSource = FS
+
+
+relationship 9dc196c1-98ad-4d49-9e5b-f56407e6c733
+	fromColumn: FactInternetSales.PromotionKey
+	toColumn: DimPromotion.PromotionKey
+
+	annotation PBI_IsFromSource = FS
+
+
+relationship a485e6cc-82d0-43f8-9939-efd42ed3fe87
+	fromColumn: FactInternetSales.SalesTerritoryKey
+	toColumn: DimSalesTerritory.SalesTerritoryKey
+
+	annotation PBI_IsFromSource = FS
+
+
+relationship b2e52797-8bf1-40a6-974a-6dddca238f67
+	fromColumn: DimCustomer.GeographyKey
+	toColumn: DimGeography.GeographyKey
+
+	annotation PBI_IsFromSource = FS
+
+
+relationship bdf1f2a9-4241-4832-8971-01c32227dd28
+	fromColumn: DimProduct.ProductSubcategoryKey
+	toColumn: DimProductSubcategory.ProductSubcategoryKey
+
+	annotation PBI_IsFromSource = FS
+
+
+relationship 6d47db24-9b7a-40d0-a53c-aeccd8c01980
+	isActive: false
+	fromColumn: DimGeography.SalesTerritoryKey
+	toColumn: DimSalesTerritory.SalesTerritoryKey
+
+	annotation PBI_IsFromSource = FS
