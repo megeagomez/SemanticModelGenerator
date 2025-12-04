@@ -120,57 +120,116 @@ class Table:
     
     @staticmethod
     def _parse_measures(content: str) -> List[Measure]:
-        """Parsea las medidas del contenido TMDL"""
+        """Parsea las medidas del contenido TMDL, soportando expresiones multi-línea y bloques con ```."""
         measures = []
         lines = content.split('\n')
-        
+
         in_measure = False
+        in_code_block = False
         current_measure = None
         measure_content = []
-        
+        base_indent = 0
+
         for line in lines:
-            # Detectar inicio de una medida: "measure NombreMedida = ..." o "measure 'Nombre Medida' = ..."
+            # Detectar inicio de una medida
             if re.match(r"^\s*measure\s+", line):
+                # Cerrar medida previa
                 if current_measure:
                     current_measure.raw_content = '\n'.join(measure_content)
+                    parser = TmdlParser(current_measure.raw_content)
+                    current_measure.format_string = parser.get_property('formatString')
+                    current_measure.is_hidden = parser.get_property('isHidden', False)
                     measures.append(current_measure)
-                
+
                 current_measure = Measure()
-                # Extraer nombre de la medida (puede estar entre comillas simples)
+                measure_content = [line]
+                in_measure = True
+                in_code_block = False
+                base_indent = len(line) - len(line.lstrip())
+
+                # Nombre de la medida
                 match = re.match(r"^\s*measure\s+['\"]?([^'\"=]+)['\"]?\s*=", line)
                 if match:
                     current_measure.name = match.group(1).strip()
-                
-                # Extraer la expresión DAX
+
+                # Expresión en la misma línea (si existe)
                 expr_match = re.match(r"^\s*measure\s+['\"]?[^'\"=]+['\"]?\s*=\s*(.+)", line)
                 if expr_match:
-                    current_measure.expression = expr_match.group(1).strip()
-                
-                measure_content = [line]
-                in_measure = True
-            elif in_measure:
+                    expr_line = expr_match.group(1).strip()
+                    # Si empieza bloque ``` quitarlo y activar modo bloque
+                    if expr_line.startswith('```'):
+                        in_code_block = True
+                        expr_line = expr_line[3:].strip()
+                    if expr_line:
+                        current_measure.expression = expr_line
+                else:
+                    current_measure.expression = ""
+                continue
+
+            if in_measure:
                 measure_content.append(line)
-                # Si encontramos una línea que no está indentada y no es parte de la medida, terminamos
-                if line.strip() and not line.strip().startswith((' ', '\t')):
-                    if current_measure:
-                        current_measure.raw_content = '\n'.join(measure_content)
-                        # Parsear propiedades adicionales usando TmdlParser
-                        parser = TmdlParser(current_measure.raw_content)
-                        current_measure.format_string = parser.get_property('formatString')
-                        current_measure.is_hidden = parser.get_property('isHidden', False)
-                        measures.append(current_measure)
-                    in_measure = False
-                    current_measure = None
-                    measure_content = []
-        
-        # Agregar la última medida si existe
+
+                # Toggle de bloque de código
+                stripped = line.strip()
+                if stripped.startswith('```'):
+                    # Si ya estamos en bloque, cerrar; si no, abrir
+                    if in_code_block:
+                        in_code_block = False
+                    else:
+                        in_code_block = True
+                    # Quitar las ``` de la expresión (solo marcadores, no contenido)
+                    marker = stripped[3:].strip()
+                    if marker:
+                        current_measure.expression += ("\n" if current_measure.expression else "") + marker
+                    continue
+
+                # Si estamos dentro de bloque de código, toda línea pertenece a la expresión
+                if in_code_block:
+                    current_measure.expression += ("\n" if current_measure.expression else "") + line.rstrip()
+                    continue
+
+                # Fuera de bloque: detectar propiedades o fin de medida
+                # Propiedades comunes de medida
+                if re.match(r"^\s*formatString\s*:", line):
+                    # Se capturará luego via TmdlParser; no añadir a expresión
+                    pass
+                elif re.match(r"^\s*isHidden\b", line):
+                    pass
+                elif re.match(r"^\s*annotation\s+", line):
+                    # Anotaciones no forman parte de la expresión
+                    pass
+                else:
+                    # Si es una línea indented (más que la base), considerarla parte de la expresión
+                    current_indent = len(line) - len(line.lstrip())
+                    if stripped and current_indent > base_indent:
+                        current_measure.expression += ("\n" if current_measure.expression else "") + stripped
+                    else:
+                        # Fin del bloque de medida cuando volvemos a indentación base y la línea no es vacía
+                        if stripped:
+                            current_measure.raw_content = '\n'.join(measure_content)
+                            parser = TmdlParser(current_measure.raw_content)
+                            current_measure.format_string = parser.get_property('formatString')
+                            current_measure.is_hidden = parser.get_property('isHidden', False)
+                            measures.append(current_measure)
+                            # Reset estado para procesar esta línea como fuera de medida
+                            in_measure = False
+                            in_code_block = False
+                            current_measure = None
+                            measure_content = []
+                            # Continuar para re-evaluar la línea en el siguiente ciclo
+                            continue
+                
+                # Continuar a siguiente línea
+                continue
+
+        # Cerrar última medida
         if current_measure:
             current_measure.raw_content = '\n'.join(measure_content)
             parser = TmdlParser(current_measure.raw_content)
             current_measure.format_string = parser.get_property('formatString')
             current_measure.is_hidden = parser.get_property('isHidden', False)
             measures.append(current_measure)
-        
+
         return measures
     
     @staticmethod

@@ -1,5 +1,5 @@
 from pathlib import Path
-from models import SemanticModel, TableElementSpec, ReportParser
+from models import SemanticModel, TableElementSpec, clsReport
 from collections import defaultdict
 
 def main():
@@ -167,8 +167,10 @@ def main():
         # Analizar cada reporte
         for report_dir in report_dirs:
             print(f"\n  Analizando: {report_dir.name}")
-            parser = ReportParser(str(report_dir))
-            references = parser.parse()
+            report = clsReport(str(report_dir))
+            
+            # Obtener columnas usadas
+            references = {table: sorted(list(cols)) for table, cols in report.get_all_columns_used().items()}
             
             print(f"    Referencias encontradas: {len(references)} tablas")
             

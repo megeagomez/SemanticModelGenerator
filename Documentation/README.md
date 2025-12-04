@@ -40,3 +40,25 @@ model.create_subset_model(
 
 **La dirección de búsqueda NO modifica las relaciones, solo determina qué incluir.**
 
+## Clases Principales
+
+### Modelos Semánticos
+- **[SemanticModel](SemanticModel.md)** - Clase principal para cargar y manipular modelos
+- **[Table](Table.md)** - Tablas del modelo con columnas, medidas, jerarquías
+- **[Relationship](Relationship.md)** - Relaciones entre tablas
+- **[Culture](Culture.md)** - Culturas y traducciones
+- **[Platform](Platform.md)** - Configuración de la plataforma
+- **[Definition](Definition.md)** - Definición del modelo
+
+### Análisis de Reportes
+- **[clsReport](Report.md)** - Analizar reportes Power BI (.Report)
+  - **Visual** - Visuales individuales
+  - **Page** - Páginas del reporte
+  - **FilterMixin** - Extracción de filtros
+
+### Componentes Internos
+- **[TmdlParser](TmdlParser.md)** - Parser para archivos TMDL
+- **[Column](Column.md)** - Columnas de tablas
+- **[Measure](Measure.md)** - Medidas DAX
+- **[Partition](Partition.md)** - Particiones de datos
+- **Model** - Modelo base para operaciones TMDL

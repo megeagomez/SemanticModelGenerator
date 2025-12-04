@@ -7,9 +7,11 @@ Biblioteca de Python para manipular modelos semánticos de Power BI (archivos `.
 - **Carga y guardado** de modelos semánticos completos
 - **Creación de submodelos** con filtrado inteligente de tablas y relaciones
 - **Filtrado de elementos** (columnas, medidas, jerarquías) con modos include/exclude
-- **Análisis de reportes** (.Report) para extraer referencias a tablas y columnas
+- **Análisis de reportes** (.Report) para extraer columnas y medidas usadas
+- **Generación de SVG** de páginas de reportes con visuales
 - **Preservación de metadatos** y propiedades originales
 - **Soporte para TMDL** (formato de definición de modelos tabulares)
+- **Integración con Claude Desktop** vía servidor MCP
 
 ## 📦 Instalación
 
@@ -96,14 +98,14 @@ subset = model.create_subset_model(
 ### Analizar reportes y crear submodelo basado en uso
 
 ```python
-from models import ReportParser
+from models import clsReport
 from collections import defaultdict
 
 # Analizar todos los reportes
 all_references = defaultdict(set)
 for report_dir in Path("Modelos").glob("*.Report"):
-    parser = ReportParser(str(report_dir))
-    references = parser.parse()
+    report = clsReport(str(report_dir))
+    references = report.get_all_columns_used()
     
     for table, columns in references.items():
         all_references[table].update(columns)
@@ -127,7 +129,8 @@ subset = model.create_subset_model(
 La documentación completa se encuentra en la carpeta [`Documentation/`](Documentation/):
 
 - [README principal](Documentation/README.md) - Esquema de clases y ejemplos
-- [SemanticModel](Documentation/SemanticModel.md) - Clase principal
+- [SemanticModel](Documentation/SemanticModel.md) - Clase principal para modelos
+- [Report](Documentation/Report.md) - Análisis de reportes Power BI
 - [Table](Documentation/Table.md) - Gestión de tablas
 - [Relationship](Documentation/Relationship.md) - Relaciones entre tablas
 - [Model](Documentation/Model.md) - Propiedades del modelo
@@ -135,6 +138,7 @@ La documentación completa se encuentra en la carpeta [`Documentation/`](Documen
 - [Platform](Documentation/Platform.md) - Configuración de plataforma
 - [Definition](Documentation/Definition.md) - Definición del modelo
 - [TmdlParser](Documentation/TmdlParser.md) - Parser de formato TMDL
+- [MCP_SERVER](MCP_SERVER.md) - Integración con Claude Desktop
 - [PROMPTS_HISTORY](Documentation/PROMPTS_HISTORY.md) - Historia del desarrollo
 
 ## 🎯 Casos de Uso
