@@ -17,7 +17,7 @@ Biblioteca de Python para manipular modelos semánticos de Power BI (archivos `.
 
 ```bash
 # Clonar el repositorio
-git clone https://github.com/TU_USUARIO/TU_REPOSITORIO.git
+git clone https://github.com/megeagomez/SemanticModelGenerator.git
 cd "pyconstelaciones + Reports"
 
 # Crear entorno virtual
