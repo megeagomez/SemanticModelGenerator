@@ -18,13 +18,14 @@ table DimCustomer
 
 		annotation SummarizationSetBy = Automatic
 
+
 	partition DimCustomer = m
 		mode: import
 		source =
-				let
-				    Origen = Sql.Databases("localhost"),
-				    AdventureWorksDW2022 = Origen{[Name="AdventureWorksDW2022"]}[Data],
-				    dbo_DimCustomer = AdventureWorksDW2022{[Schema="dbo",Item="DimCustomer"]}[Data]
-				in
-				    dbo_DimCustomer
-
+			let
+			Origen = Sql.Databases("localhost"),
+			AdventureWorksDW2022 = Origen{[Name="AdventureWorksDW2022"]}[Data],
+			dbo_DimCustomer = AdventureWorksDW2022{[Schema="dbo",Item="DimCustomer"]}[Data],
+			#"Columnas quitadas" = Table.RemoveColumns(dbo_DimCustomer,{"AddressLine1", "AddressLine2", "BirthDate", "CommuteDistance", "CustomerAlternateKey", "DateFirstPurchase", "EmailAddress", "EnglishEducation", "EnglishOccupation", "FirstName", "FrenchEducation", "FrenchOccupation", "Gender", "GeographyKey", "HouseOwnerFlag", "LastName", "MiddleName", "NameStyle", "NumberCarsOwned", "NumberChildrenAtHome", "Phone", "SpanishEducation", "SpanishOccupation", "Suffix", "Title", "TotalChildren", "YearlyIncome"})
+			in
+			#"Columnas quitadas"

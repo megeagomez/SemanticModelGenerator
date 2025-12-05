@@ -315,6 +315,97 @@ class Table:
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(self.raw_content)
     
+    def get_removed_columns(self, filtered_columns: List[Column]) -> List[str]:
+        """
+        Obtiene la lista de nombres de columnas que fueron eliminadas.
+        
+        Args:
+            filtered_columns: Lista de columnas que se mantienen
+        
+        Returns:
+            Lista de nombres de columnas eliminadas
+        """
+        filtered_names = {col.name for col in filtered_columns}
+        original_names = {col.name for col in self.columns}
+        removed_names = original_names - filtered_names
+        return sorted(list(removed_names))
+    
+    def update_partition_m_expression(self, partition: Partition, removed_columns: List[str]) -> Partition:
+        """
+        Actualiza la expresión M de una partición para eliminar columnas usando Table.RemoveColumns.
+        
+        Args:
+            partition: Partición a actualizar
+            removed_columns: Lista de nombres de columnas a eliminar
+        
+        Returns:
+            Nueva instancia de Partition con expresión M actualizada
+        """
+        if not removed_columns or partition.source_type != 'm':
+            return partition
+        
+        updated_partition = Partition()
+        updated_partition.name = partition.name
+        updated_partition.mode = partition.mode
+        updated_partition.source_type = partition.source_type
+        updated_partition.raw_content = partition.raw_content
+        
+        # Parsear la expresión M
+        m_expr = partition.source_expression.strip()
+        
+        # Buscar el último identificador antes de 'in' (el paso final)
+        # Patrón: let ... #"Paso Final" = ... in #"Paso Final"
+        lines = m_expr.split('\n')
+        
+        # Encontrar la línea 'in'
+        in_line_idx = -1
+        for idx, line in enumerate(lines):
+            if re.match(r'^\s*in\s*$', line) or re.match(r'^\s*in\s+', line):
+                in_line_idx = idx
+                break
+        
+        if in_line_idx == -1:
+            # No hay estructura let...in, devolver sin cambios
+            updated_partition.source_expression = partition.source_expression
+            return updated_partition
+        
+        # Extraer el nombre del último paso (después de 'in')
+        in_line = lines[in_line_idx].strip()
+        last_step_match = re.match(r'in\s+(.*?)\s*$', in_line)
+        
+        if not last_step_match:
+            # 'in' está solo en su línea, buscar en la siguiente
+            if in_line_idx + 1 < len(lines):
+                last_step_name = lines[in_line_idx + 1].strip()
+            else:
+                updated_partition.source_expression = partition.source_expression
+                return updated_partition
+        else:
+            last_step_name = last_step_match.group(1).strip()
+        
+        # Crear nuevo paso para remover columnas
+        # Formato: {"Column1", "Column2"}
+        columns_list = '{' + ', '.join(f'"{col}"' for col in removed_columns) + '}'
+        remove_step_name = '#"Columnas quitadas"'
+        
+        # Insertar el nuevo paso antes de 'in'
+        new_step_line = f'{remove_step_name} = Table.RemoveColumns({last_step_name},{columns_list})'
+        
+        # Reconstruir la expresión M
+        new_lines = lines[:in_line_idx]  # Todo antes de 'in'
+        
+        # Agregar coma al final de la línea anterior si no la tiene
+        if new_lines and not new_lines[-1].rstrip().endswith(','):
+            new_lines[-1] = new_lines[-1].rstrip() + ','
+        
+        new_lines.append(new_step_line)
+        new_lines.append('in')
+        new_lines.append(f'{remove_step_name}')
+        
+        updated_partition.source_expression = '\n'.join(new_lines)
+        
+        return updated_partition
+    
     def filter_elements(
         self,
         columns: Optional[List[str]] = None,
@@ -341,8 +432,8 @@ class Table:
         filtered_table.line_age_granularity = self.line_age_granularity
         filtered_table.annotations = self.annotations.copy()
         
-        # IMPORTANTE: Las particiones SIEMPRE se mantienen (son obligatorias)
-        filtered_table.partitions = self.partitions.copy()
+        # IMPORTANTE: Las particiones se copian pero se actualizarán después
+        filtered_table.partitions = []
         
         # Filtrar columnas
         if columns is not None:
@@ -392,11 +483,20 @@ class Table:
         else:
             filtered_table.hierarchies = self.hierarchies.copy()
         
+        # Determinar columnas eliminadas
+        removed_columns = self.get_removed_columns(filtered_table.columns)
+        
+        # Actualizar particiones: agregar Table.RemoveColumns si hay columnas eliminadas
+        for partition in self.partitions:
+            updated_partition = self.update_partition_m_expression(partition, removed_columns)
+            filtered_table.partitions.append(updated_partition)
+        
         # CORREGIDO: Usar raw_content original y filtrar en lugar de reconstruir
         filtered_table.raw_content = self._filter_raw_content(
             filtered_table.columns,
             filtered_table.measures,
-            filtered_table.hierarchies
+            filtered_table.hierarchies,
+            filtered_table.partitions
         )
         
         return filtered_table
@@ -405,7 +505,8 @@ class Table:
         self,
         filtered_columns: List[Column],
         filtered_measures: List[Measure],
-        filtered_hierarchies: List[Dict]
+        filtered_hierarchies: List[Dict],
+        filtered_partitions: List[Partition]
     ) -> str:
         """
         Filtra el contenido raw manteniendo solo los elementos especificados,
@@ -415,6 +516,7 @@ class Table:
             filtered_columns: Columnas a mantener
             filtered_measures: Medidas a mantener
             filtered_hierarchies: Jerarquías a mantener
+            filtered_partitions: Particiones actualizadas (con M expression modificada si aplica)
         
         Returns:
             Contenido TMDL filtrado con atributos completos
@@ -535,31 +637,69 @@ class Table:
                 i += 1
                 continue
             
-            # Detectar inicio de partition (siempre se mantienen)
+            # Detectar inicio de partition (se reemplazan con versiones actualizadas)
             elif stripped.startswith('partition '):
                 # Guardar elemento anterior si existe y se debe mantener
                 if in_element and keep_current_element:
                     result_lines.extend(current_element_lines)
                 
-                in_element = False
-                current_element_type = None
-                current_element_name = None
-                current_element_lines = []
-                keep_current_element = False
+                in_element = True
+                current_element_type = 'partition'
+                current_element_lines = [line]
+                base_indent = current_indent
                 
-                # Agregar la línea de partition
-                result_lines.append(line)
+                # Extraer nombre de partición
+                match = re.match(r'partition\s+([^\s=]+)', stripped)
+                if match:
+                    current_element_name = match.group(1)
+                    # Buscar la partición actualizada correspondiente
+                    matching_partition = None
+                    for part in filtered_partitions:
+                        if part.name == current_element_name:
+                            matching_partition = part
+                            break
+                    
+                    if matching_partition:
+                        keep_current_element = True
+                        # Usar la partición actualizada en lugar de la original
+                        # Guardaremos las líneas del elemento pero luego las reemplazaremos
+                        current_element_lines = []  # Reiniciar para capturar y reemplazar
+                    else:
+                        keep_current_element = False
+                else:
+                    keep_current_element = False
+                
                 i += 1
                 continue
             
-            # Estamos dentro de un elemento (column, measure, hierarchy)
+            # Estamos dentro de un elemento (column, measure, hierarchy, partition)
             if in_element:
                 # Si la indentación vuelve al nivel base o menor y no es línea vacía,
                 # significa fin del elemento actual
                 if current_indent <= base_indent and stripped:
                     # Guardar elemento actual si se debe mantener
                     if keep_current_element:
-                        result_lines.extend(current_element_lines)
+                        if current_element_type == 'partition':
+                            # Para particiones, generar contenido actualizado
+                            matching_partition = None
+                            for part in filtered_partitions:
+                                if part.name == current_element_name:
+                                    matching_partition = part
+                                    break
+                            
+                            if matching_partition:
+                                # Generar TMDL para la partición actualizada
+                                result_lines.append('')
+                                result_lines.append(f'\tpartition {matching_partition.name} = {matching_partition.source_type}')
+                                if matching_partition.mode:
+                                    result_lines.append(f'\t\tmode: {matching_partition.mode}')
+                                if matching_partition.source_expression:
+                                    result_lines.append('\t\tsource =')
+                                    # Indentar cada línea de la expresión M
+                                    for expr_line in matching_partition.source_expression.split('\n'):
+                                        result_lines.append(f'\t\t\t{expr_line}')
+                        else:
+                            result_lines.extend(current_element_lines)
                     
                     # Reset para procesar la línea actual en la siguiente iteración
                     in_element = False
@@ -570,7 +710,8 @@ class Table:
                     continue
                 else:
                     # Línea pertenece al elemento actual
-                    current_element_lines.append(line)
+                    if current_element_type != 'partition':  # Solo capturar si no es partition
+                        current_element_lines.append(line)
             else:
                 # Fuera de elementos específicos, agregar línea directamente
                 # (partition, anotaciones globales, etc.)
@@ -580,7 +721,27 @@ class Table:
         
         # Guardar último elemento si existe y se debe mantener
         if in_element and keep_current_element:
-            result_lines.extend(current_element_lines)
+            if current_element_type == 'partition':
+                # Para particiones, generar contenido actualizado
+                matching_partition = None
+                for part in filtered_partitions:
+                    if part.name == current_element_name:
+                        matching_partition = part
+                        break
+                
+                if matching_partition:
+                    # Generar TMDL para la partición actualizada
+                    result_lines.append('')
+                    result_lines.append(f'\tpartition {matching_partition.name} = {matching_partition.source_type}')
+                    if matching_partition.mode:
+                        result_lines.append(f'\t\tmode: {matching_partition.mode}')
+                    if matching_partition.source_expression:
+                        result_lines.append('\t\tsource =')
+                        # Indentar cada línea de la expresión M
+                        for expr_line in matching_partition.source_expression.split('\n'):
+                            result_lines.append(f'\t\t\t{expr_line}')
+            else:
+                result_lines.extend(current_element_lines)
         
         return '\n'.join(result_lines)
     

@@ -27,15 +27,16 @@ table DimProductSubcategory
 
 		annotation SummarizationSetBy = Automatic
 
+
 	partition DimProductSubcategory = m
 		mode: import
 		source =
-				let
-				    Origen = Sql.Databases("localhost"),
-				    AdventureWorksDW2022 = Origen{[Name="AdventureWorksDW2022"]}[Data],
-				    dbo_DimProductSubcategory = AdventureWorksDW2022{[Schema="dbo",Item="DimProductSubcategory"]}[Data]
-				in
-				    dbo_DimProductSubcategory
-
+			let
+			Origen = Sql.Databases("localhost"),
+			AdventureWorksDW2022 = Origen{[Name="AdventureWorksDW2022"]}[Data],
+			dbo_DimProductSubcategory = AdventureWorksDW2022{[Schema="dbo",Item="DimProductSubcategory"]}[Data],
+			#"Columnas quitadas" = Table.RemoveColumns(dbo_DimProductSubcategory,{"EnglishProductSubcategoryName", "FrenchProductSubcategoryName", "ProductSubcategoryAlternateKey"})
+			in
+			#"Columnas quitadas"
 	annotation PBI_ResultType = Table
 

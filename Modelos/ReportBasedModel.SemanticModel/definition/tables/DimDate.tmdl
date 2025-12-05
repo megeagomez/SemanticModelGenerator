@@ -19,13 +19,14 @@ table DimDate
 
 		annotation SummarizationSetBy = Automatic
 
+
 	partition DimDate = m
 		mode: import
 		source =
-				let
-				    Origen = Sql.Databases("localhost"),
-				    AdventureWorksDW2022 = Origen{[Name="AdventureWorksDW2022"]}[Data],
-				    dbo_DimDate = AdventureWorksDW2022{[Schema="dbo",Item="DimDate"]}[Data]
-				in
-				    dbo_DimDate
-
+			let
+			Origen = Sql.Databases("localhost"),
+			AdventureWorksDW2022 = Origen{[Name="AdventureWorksDW2022"]}[Data],
+			dbo_DimDate = AdventureWorksDW2022{[Schema="dbo",Item="DimDate"]}[Data],
+			#"Columnas quitadas" = Table.RemoveColumns(dbo_DimDate,{"CalendarQuarter", "CalendarSemester", "DayNumberOfMonth", "DayNumberOfWeek", "DayNumberOfYear", "EnglishDayNameOfWeek", "EnglishMonthName", "FiscalQuarter", "FiscalSemester", "FiscalYear", "FrenchDayNameOfWeek", "FrenchMonthName", "FullDateAlternateKey", "MonthNumberOfYear", "SpanishDayNameOfWeek", "SpanishMonthName", "WeekNumberOfYear"})
+			in
+			#"Columnas quitadas"

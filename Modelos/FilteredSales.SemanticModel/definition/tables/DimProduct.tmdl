@@ -35,13 +35,14 @@ table DimProduct
 
 		annotation SummarizationSetBy = Automatic
 
+
 	partition DimProduct = m
 		mode: import
 		source =
-				let
-				    Origen = Sql.Databases("localhost"),
-				    AdventureWorksDW2022 = Origen{[Name="AdventureWorksDW2022"]}[Data],
-				    dbo_DimProduct = AdventureWorksDW2022{[Schema="dbo",Item="DimProduct"]}[Data]
-				in
-				    dbo_DimProduct
-
+			let
+			Origen = Sql.Databases("localhost"),
+			AdventureWorksDW2022 = Origen{[Name="AdventureWorksDW2022"]}[Data],
+			dbo_DimProduct = AdventureWorksDW2022{[Schema="dbo",Item="DimProduct"]}[Data],
+			#"Columnas quitadas" = Table.RemoveColumns(dbo_DimProduct,{"ArabicDescription", "ChineseDescription", "Class", "DaysToManufacture", "DealerPrice", "EndDate", "EnglishDescription", "FinishedGoodsFlag", "FrenchDescription", "FrenchProductName", "GermanDescription", "HebrewDescription", "JapaneseDescription", "ListPrice", "ModelName", "ProductAlternateKey", "ProductLine", "ReorderPoint", "SafetyStockLevel", "Size", "SizeRange", "SizeUnitMeasureCode", "SpanishProductName", "StandardCost", "StartDate", "Status", "Style", "ThaiDescription", "TurkishDescription", "Weight", "WeightUnitMeasureCode"})
+			in
+			#"Columnas quitadas"

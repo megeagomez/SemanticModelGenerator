@@ -74,13 +74,14 @@ table FactInternetSales
 
 		annotation PBI_FormatHint = {"currencyCulture":"es-ES"}
 
+
 	partition FactInternetSales = m
 		mode: import
 		source =
-				let
-				    Origen = Sql.Databases("localhost"),
-				    AdventureWorksDW2022 = Origen{[Name="AdventureWorksDW2022"]}[Data],
-				    dbo_FactInternetSales = AdventureWorksDW2022{[Schema="dbo",Item="FactInternetSales"]}[Data]
-				in
-				    dbo_FactInternetSales
-
+			let
+			Origen = Sql.Databases("localhost"),
+			AdventureWorksDW2022 = Origen{[Name="AdventureWorksDW2022"]}[Data],
+			dbo_FactInternetSales = AdventureWorksDW2022{[Schema="dbo",Item="FactInternetSales"]}[Data],
+			#"Columnas quitadas" = Table.RemoveColumns(dbo_FactInternetSales,{"CarrierTrackingNumber", "CurrencyKey", "CustomerPONumber", "DiscountAmount", "DueDate", "ExtendedAmount", "Freight", "OrderDate", "ProductStandardCost", "PromotionKey", "RevisionNumber", "SalesOrderLineNumber", "SalesOrderNumber", "SalesTerritoryKey", "ShipDate", "TaxAmt", "TotalProductCost", "UnitPrice", "UnitPriceDiscountPct"})
+			in
+			#"Columnas quitadas"
