@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "Report",
+    "displayName": "FilteredSales"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "18c3f45e-1e7b-40fe-9874-db790694682d"
+  }
+}

@@ -1,0 +1,113 @@
+table FactInternetSales
+	lineageTag: 0af0458f-9714-485f-a657-676541a01b76
+
+	measure OrderQty = sum(FactInternetSales[OrderQuantity])
+		formatString: 0
+		lineageTag: 18149051-c55c-444a-9098-08780eae9cd7
+
+	measure 'mi media' = sum(DimProduct[ProductKey])
+		formatString: 0
+		lineageTag: 7a592c36-a85b-4dab-8e62-3ae3ff19dfcc
+
+	column ProductKey
+		dataType: int64
+		formatString: 0
+		lineageTag: 7ead973e-d99b-4446-af3b-8616684aa4d7
+		summarizeBy: none
+		sourceColumn: ProductKey
+
+		annotation SummarizationSetBy = Automatic
+
+	column OrderDateKey
+		dataType: int64
+		formatString: 0
+		lineageTag: 293b4c42-3abd-49d6-a0b3-c44f2ad5401f
+		summarizeBy: count
+		sourceColumn: OrderDateKey
+
+		annotation SummarizationSetBy = Automatic
+
+	column DueDateKey
+		dataType: int64
+		formatString: 0
+		lineageTag: 6f4b13bb-30f4-4349-b2fe-7e36f9d7245c
+		summarizeBy: none
+		sourceColumn: DueDateKey
+
+		annotation SummarizationSetBy = Automatic
+
+	column ShipDateKey
+		dataType: int64
+		formatString: 0
+		lineageTag: 334c57a7-56bd-43a0-a5c4-09adf2936c61
+		summarizeBy: count
+		sourceColumn: ShipDateKey
+
+		annotation SummarizationSetBy = Automatic
+
+	column CustomerKey
+		dataType: int64
+		formatString: 0
+		lineageTag: 4e33089d-dd6f-4c56-8636-285035dd34b9
+		summarizeBy: none
+		sourceColumn: CustomerKey
+
+		annotation SummarizationSetBy = Automatic
+
+	column PromotionKey
+		dataType: int64
+		formatString: 0
+		lineageTag: c9ed0908-8f24-4cde-8bb6-a2c0af738e79
+		summarizeBy: none
+		sourceColumn: PromotionKey
+
+		annotation SummarizationSetBy = Automatic
+
+	column CurrencyKey
+		dataType: int64
+		formatString: 0
+		lineageTag: 6d8efd77-cb30-4cf1-a804-a7c408146d43
+		summarizeBy: none
+		sourceColumn: CurrencyKey
+
+		annotation SummarizationSetBy = Automatic
+
+	column SalesTerritoryKey
+		dataType: int64
+		formatString: 0
+		lineageTag: fcaa587b-05e7-4ea2-a1a3-5d1c330e7ef3
+		summarizeBy: none
+		sourceColumn: SalesTerritoryKey
+
+		annotation SummarizationSetBy = Automatic
+
+	column OrderQuantity
+		dataType: int64
+		formatString: 0
+		lineageTag: 59013807-ff28-4900-a1d8-d87e7ae00baf
+		summarizeBy: sum
+		sourceColumn: OrderQuantity
+
+		annotation SummarizationSetBy = Automatic
+
+	column SalesAmount
+		dataType: decimal
+		formatString: #,0.###############\ "€";-#,0.###############\ "€";#,0.###############\ "€"
+		lineageTag: 4dab0018-12ed-40f3-93ef-0c9d16b3d516
+		summarizeBy: sum
+		sourceColumn: SalesAmount
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"currencyCulture":"es-ES"}
+
+	partition FactInternetSales = m
+		mode: import
+		source =
+				let
+				    Origen = Sql.Databases("localhost"),
+				    AdventureWorksDW2022 = Origen{[Name="AdventureWorksDW2022"]}[Data],
+				    dbo_FactInternetSales = AdventureWorksDW2022{[Schema="dbo",Item="FactInternetSales"]}[Data]
+				in
+				    dbo_FactInternetSales
+

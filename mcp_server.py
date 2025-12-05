@@ -6,6 +6,7 @@ Expone herramientas para crear, analizar y optimizar modelos mediante lenguaje n
 
 import asyncio
 import json
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from collections import defaultdict
@@ -713,6 +714,21 @@ class PowerBIModelServer:
         report_dir = self.models_path / f"{base}.Report"
         report_dir.mkdir(parents=True, exist_ok=True)
 
+        # .platform (metadata del report)
+        platform_path = report_dir / ".platform"
+        platform_obj = {
+            "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+            "metadata": {
+                "type": "Report",
+                "displayName": base
+            },
+            "config": {
+                "version": "2.0",
+                "logicalId": str(uuid.uuid4())
+            }
+        }
+        platform_path.write_text(json.dumps(platform_obj, indent=2), encoding="utf-8")
+
         # definition.pbir (link al modelo)
         pbir_path = report_dir / "definition.pbir"
         pbir_obj = {
@@ -735,14 +751,70 @@ class PowerBIModelServer:
         static_dir.mkdir(parents=True, exist_ok=True)
 
         report_json = {
-            "$schema": "https://developer.microsoft.com/json-schemas/fabric/report/2.0.0/report.schema.json",
-            "name": base,
-            "displayName": f"{base} Report",
-            "description": f"Empty report linked to {model_name}",
-            "pages": []
+            "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/report/3.0.0/schema.json",
+            "themeCollection": {
+                "baseTheme": {
+                    "name": "CY25SU11",
+                    "reportVersionAtImport": {
+                        "visual": "2.4.0",
+                        "report": "3.0.0",
+                        "page": "2.3.0"
+                    },
+                    "type": "SharedResources"
+                }
+            },
+            "resourcePackages": [
+                {
+                    "name": "SharedResources",
+                    "type": "SharedResources",
+                    "items": [
+                        {
+                            "name": "CY25SU11",
+                            "path": "BaseThemes/CY25SU11.json",
+                            "type": "BaseTheme"
+                        }
+                    ]
+                }
+            ],
+            "settings": {
+                "useStylableVisualContainerHeader": True,
+                "exportDataMode": "AllowSummarized",
+                "defaultDrillFilterOtherVisuals": True,
+                "allowChangeFilterTypes": True,
+                "useEnhancedTooltips": True,
+                "useDefaultAggregateDisplayName": True
+            }
         }
         (definition_dir / "report.json").write_text(json.dumps(report_json, indent=2), encoding="utf-8")
-        (definition_dir / "version.json").write_text(json.dumps({"version": "5.0", "build": "0"}, indent=2), encoding="utf-8")
+        
+        version_json = {
+            "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/versionMetadata/1.0.0/schema.json",
+            "version": "2.0.0"
+        }
+        (definition_dir / "version.json").write_text(json.dumps(version_json, indent=2), encoding="utf-8")
+        
+        # Crear pages.json con una página vacía
+        page_id = str(uuid.uuid4()).replace('-', '')[:20]  # ID de 20 caracteres
+        pages_json = {
+            "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/pagesMetadata/1.0.0/schema.json",
+            "pageOrder": [page_id],
+            "activePageName": page_id
+        }
+        (pages_dir / "pages.json").write_text(json.dumps(pages_json, indent=2), encoding="utf-8")
+        
+        # Crear directorio de página y archivo page.json
+        page_folder = pages_dir / page_id
+        page_folder.mkdir(parents=True, exist_ok=True)
+        
+        page_json = {
+            "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/page/2.0.0/schema.json",
+            "name": page_id,
+            "displayName": "Página 1",
+            "displayOption": "FitToPage",
+            "height": 720,
+            "width": 1280
+        }
+        (page_folder / "page.json").write_text(json.dumps(page_json, indent=2), encoding="utf-8")
 
         # Crear .pbip que apunte al report
         pbip_path = self.models_path / f"{base}.pbip"

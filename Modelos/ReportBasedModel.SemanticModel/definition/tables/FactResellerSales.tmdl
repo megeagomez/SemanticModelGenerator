@@ -1,0 +1,60 @@
+table FactResellerSales
+	lineageTag: d9e5c9e3-f28a-4697-91ca-0d00f3cd3b85
+
+	column ProductKey
+		dataType: int64
+		formatString: 0
+		lineageTag: 72ab0894-63a4-45fd-b10e-cf2f08752a9a
+		summarizeBy: none
+		sourceColumn: ProductKey
+
+		annotation SummarizationSetBy = Automatic
+
+	column OrderDateKey
+		dataType: int64
+		formatString: 0
+		lineageTag: bea9cb92-5e14-4934-b6ff-7903196ba445
+		summarizeBy: count
+		sourceColumn: OrderDateKey
+
+		annotation SummarizationSetBy = Automatic
+
+	column DueDateKey
+		dataType: int64
+		formatString: 0
+		lineageTag: 3e360922-be64-4f03-872e-8d955a976d12
+		summarizeBy: none
+		sourceColumn: DueDateKey
+
+		annotation SummarizationSetBy = Automatic
+
+	column ShipDateKey
+		dataType: int64
+		formatString: 0
+		lineageTag: 793d8509-c50e-4f63-a938-2dcb5dd17177
+		summarizeBy: count
+		sourceColumn: ShipDateKey
+
+		annotation SummarizationSetBy = Automatic
+
+	column SalesAmount
+		dataType: decimal
+		formatString: #,0.###############\ "€";-#,0.###############\ "€";#,0.###############\ "€"
+		lineageTag: d17621a5-ac85-4ffa-b15f-d86252f96588
+		summarizeBy: sum
+		sourceColumn: SalesAmount
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"currencyCulture":"es-ES"}
+
+	partition FactResellerSales = m
+		mode: import
+		source =
+				let
+				    Origen = Sql.Databases("localhost"),
+				    AdventureWorksDW2022 = Origen{[Name="AdventureWorksDW2022"]}[Data],
+				    dbo_FactResellerSales = AdventureWorksDW2022{[Schema="dbo",Item="FactResellerSales"]}[Data]
+				in
+				    dbo_FactResellerSales
+
