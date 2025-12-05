@@ -850,7 +850,19 @@ class PowerBIModelServer:
         
         result += f"\n### Particiones ({len(table.partitions)}):\n"
         for partition in table.partitions:
-            result += f"- {partition.name}\n"
+            result += f"\n**{partition.name}**\n"
+            result += f"  - Tipo: {partition.source_type or 'N/A'}\n"
+            result += f"  - Modo: {partition.mode or 'N/A'}\n"
+            
+            # Mostrar preview del código fuente
+            if partition.source_expression:
+                source_lines = partition.source_expression.split('\n')
+                if len(source_lines) <= 5:
+                    result += f"  - Source:\n```\n{partition.source_expression}\n```\n"
+                else:
+                    # Mostrar primeras 5 líneas
+                    preview = '\n'.join(source_lines[:5])
+                    result += f"  - Source (primeras 5 líneas):\n```\n{preview}\n... ({len(source_lines)} líneas totales)\n```\n"
         
         return [TextContent(type="text", text=result)]
     

@@ -30,8 +30,9 @@ class Partition:
     
     def __init__(self):
         self.name: str = ""
-        self.mode: Optional[str] = None
-        self.source: Dict[str, Any] = {}
+        self.mode: Optional[str] = None  # import, directQuery, dual
+        self.source_type: Optional[str] = None  # m, calculated, etc.
+        self.source_expression: str = ""  # Código M, SQL, o expresión DAX
         self.raw_content: str = ""
 
 class Table:
@@ -236,7 +237,77 @@ class Table:
     def _parse_partitions(content: str) -> List[Partition]:
         """Parsea las particiones del contenido TMDL"""
         partitions = []
-        # Similar a _parse_columns pero para particiones
+        in_partition = False
+        current_partition = None
+        partition_content = []
+        in_source_block = False
+        base_indent = 0
+        
+        for line in content.split('\n'):
+            stripped = line.strip()
+            
+            # Detectar inicio de partición: "partition NombreParticion = tipo"
+            if re.match(r'^\s*partition\s+', line):
+                # Guardar partición anterior si existe
+                if current_partition:
+                    current_partition.raw_content = '\n'.join(partition_content)
+                    partitions.append(current_partition)
+                
+                current_partition = Partition()
+                partition_content = [line]
+                in_partition = True
+                in_source_block = False
+                base_indent = len(line) - len(line.lstrip())
+                
+                # Extraer nombre y tipo: "partition DimCustomer = m"
+                match = re.match(r'^\s*partition\s+([^\s=]+)\s*=\s*(\w+)', line)
+                if match:
+                    current_partition.name = match.group(1)
+                    current_partition.source_type = match.group(2)  # m, calculated, etc.
+                continue
+            
+            if in_partition:
+                partition_content.append(line)
+                current_indent = len(line) - len(line.lstrip())
+                
+                # Detectar "mode: import/directQuery/dual"
+                if re.match(r'^\s*mode:\s*', line):
+                    mode_match = re.match(r'^\s*mode:\s*(\w+)', line)
+                    if mode_match:
+                        current_partition.mode = mode_match.group(1)
+                    continue
+                
+                # Detectar inicio de bloque source
+                if re.match(r'^\s*source\s*=', line):
+                    in_source_block = True
+                    # Capturar expresión inline si existe
+                    source_match = re.match(r'^\s*source\s*=\s*(.+)', line)
+                    if source_match:
+                        expr = source_match.group(1).strip()
+                        current_partition.source_expression = expr
+                    continue
+                
+                # Si estamos en bloque source, capturar contenido
+                if in_source_block:
+                    # Líneas con indentación mayor al base son parte del source
+                    if stripped and current_indent > base_indent:
+                        if current_partition.source_expression:
+                            current_partition.source_expression += "\n" + line.strip()
+                        else:
+                            current_partition.source_expression = line.strip()
+                    elif stripped:
+                        # Fin del bloque source (volvemos a indentación base)
+                        in_source_block = False
+                        # Si la línea no es otra propiedad de partition, terminamos
+                        if not re.match(r'^\s*(mode|annotation|dataView):', line):
+                            in_partition = False
+                            continue
+        
+        # Guardar última partición
+        if current_partition:
+            current_partition.raw_content = '\n'.join(partition_content)
+            partitions.append(current_partition)
+        
         return partitions
     
     def save_to_file(self, filepath: Path):

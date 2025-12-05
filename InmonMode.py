@@ -2,37 +2,11 @@ from pathlib import Path
 from models import SemanticModel, TableElementSpec, clsReport
 from collections import defaultdict
 
-def main():
+def run_adventureworks_examples(semantic_model, base_path):
     """
-    Carga el modelo semántico FullAdventureWorks y crea una copia.
-    También demuestra cómo crear un submodelo con tablas específicas.
+    Ejecuta ejemplos de creación de submodelos específicos para FullAdventureWorks.
+    Solo se ejecuta si el modelo cargado es FullAdventureWorks.
     """
-    # Definir rutas - usar la ruta del workspace actual
-    base_path = Path(__file__).parent  # d:\Python apps\pyconstelaciones + Reports
-    source_path = base_path / "Modelos" / "FullAdventureWorks.SemanticModel"
-    target_path = base_path / "Modelos" / "CopyofFullAdventureWorks.SemanticModel"
-    
-    # Instanciar el modelo semántico
-    print(f"Cargando modelo desde: {source_path}")
-    semantic_model = SemanticModel(str(source_path))
-    
-    # Cargar toda la estructura del directorio
-    semantic_model.load_from_directory(source_path)
-    
-    print(f"Modelo cargado exitosamente:")
-    print(f"  - Tablas: {len(semantic_model.tables)}")
-    print(f"  - Relaciones: {len(semantic_model.relationships)}")
-    print(f"  - Culturas: {len(semantic_model.cultures)}")
-    print(f"  - Platform: {'Sí' if semantic_model.platform else 'No'}")
-    print(f"  - Definition: {'Sí' if semantic_model.definition else 'No'}")
-    print(f"  - Model: {'Sí' if semantic_model.model else 'No'}")
-    
-    # Guardar la copia en el nuevo directorio
-    print(f"\nGuardando copia en: {target_path}")
-    semantic_model.save_to_directory(target_path)
-    
-    print("\n¡Copia completada exitosamente!")
-    
     # ===== EJEMPLO 1: Submodelo simple con ManyToOne por defecto =====
     print("\n" + "="*60)
     print("EJEMPLO 1: SUBMODELO SIMPLE (SOLO MANYTOONE)")
@@ -267,6 +241,98 @@ def main():
         print(f"Error en Ejemplo 6: {e}")
         import traceback
         traceback.print_exc()
+
+def main():
+    """
+    Carga el modelo semántico FullAdventureWorks y crea una copia.
+    También demuestra cómo crear un submodelo con tablas específicas.
+    """
+    # Definir rutas - usar la ruta del workspace actual
+    #base_path = Path(__file__).parent  # d:\Python apps\pyconstelaciones + Reports
+    base_path = Path("D:/Python apps/pyModeler")
+    source_path = base_path / "Modelos" / "REA RANKING 2025_1.SemanticModel"
+    target_path = base_path / "Modelos" / "REA RANKING 2025 copy_1.SemanticModel"
+    
+    # Instanciar el modelo semántico
+    print(f"Cargando modelo desde: {source_path}")
+    semantic_model = SemanticModel(str(source_path))
+    
+    # Cargar toda la estructura del directorio
+    semantic_model.load_from_directory(source_path)
+    
+    print(f"Modelo cargado exitosamente:")
+    print(f"  - Tablas: {len(semantic_model.tables)}")
+    print(f"  - Relaciones: {len(semantic_model.relationships)}")
+    print(f"  - Culturas: {len(semantic_model.cultures)}")
+    print(f"  - Platform: {'Sí' if semantic_model.platform else 'No'}")
+    print(f"  - Definition: {'Sí' if semantic_model.definition else 'No'}")
+    print(f"  - Model: {'Sí' if semantic_model.model else 'No'}")
+    
+    # Mostrar particiones con colores
+    print("\n" + "="*60)
+    print("PARTICIONES DEL MODELO")
+    print("="*60)
+    
+    # ANSI color codes
+    GREEN = '\033[92m'  # Verde para import
+    YELLOW = '\033[93m'  # Amarillo para directQuery
+    CYAN = '\033[96m'   # Cian para dual
+    RED = '\033[91m'    # Rojo para otros
+    RESET = '\033[0m'   # Reset color
+    
+    total_partitions = 0
+    import_count = 0
+    directquery_count = 0
+    dual_count = 0
+    other_count = 0
+    
+    for table in sorted(semantic_model.tables, key=lambda t: t.name):
+        if table.partitions:
+            
+            for partition in table.partitions:
+                total_partitions += 1
+                mode = partition.mode.lower() if partition.mode else 'unknown'
+                
+                if mode == 'import':
+                    color = GREEN
+                    import_count += 1
+                elif mode == 'directquery':
+                    color = YELLOW
+                    print(f"  {color}• {table.name} [{mode}] - Tipo: {partition.source_type or 'N/A'}{RESET}")
+                    directquery_count += 1
+                elif mode == 'dual':
+                    color = CYAN
+                    dual_count += 1
+                else:
+                    color = RED
+                    other_count += 1
+                
+                #print(f"  {color}• {partition.name} [{mode}] - Tipo: {partition.source_type or 'N/A'}{RESET}")
+    
+    # Resumen
+    print("\n" + "-"*60)
+    print("RESUMEN DE PARTICIONES:")
+    print(f"  {GREEN}Import:{RESET} {import_count}")
+    print(f"  {YELLOW}DirectQuery:{RESET} {directquery_count}")
+    print(f"  {CYAN}Dual:{RESET} {dual_count}")
+    print(f"  {RED}Otros:{RESET} {other_count}")
+    print(f"  Total: {total_partitions}")
+    print("-"*60)
+    
+    # Guardar la copia en el nuevo directorio
+    print(f"\nGuardando copia en: {target_path}")
+    #semantic_model.save_to_directory(target_path)
+    
+    print("\n¡Copia completada exitosamente!")
+    
+    # Ejecutar ejemplos solo si es FullAdventureWorks
+    if "FullAdventureWorks" in str(source_path):
+        print("\n" + "="*60)
+        print("DETECTADO MODELO FULLADVENTUREWORKS - EJECUTANDO EJEMPLOS")
+        print("="*60)
+        run_adventureworks_examples(semantic_model, base_path)
+    else:
+        print(f"\nModelo '{source_path.name}' no es FullAdventureWorks - Omitiendo ejemplos")
     
 if __name__ == "__main__":
     main()
