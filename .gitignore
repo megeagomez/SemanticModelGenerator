@@ -43,6 +43,9 @@ Thumbs.db
 **/.pbi/cache.abf
 *.pbix
 
+# Modelos generados
+Modelos/
+
 # Logs
 *.log
 
