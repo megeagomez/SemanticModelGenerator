@@ -43,8 +43,13 @@ Thumbs.db
 **/.pbi/cache.abf
 *.pbix
 
-# Modelos generados
-Modelos/
+# Modelos generados (excluir todos excepto FullAdventureWorks y Second)
+Modelos/*
+!Modelos/FullAdventureWorks.SemanticModel/
+!Modelos/FullAdventureWorks.Report/
+!Modelos/FullAdventureWorks.pbip
+!Modelos/Second.Report/
+!Modelos/Second.pbip
 
 # Logs
 *.log

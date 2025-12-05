@@ -1,0 +1,56 @@
+table DimOrganization
+	lineageTag: c998663c-5d29-448c-bd75-efa337e4968c
+
+	column OrganizationKey
+		dataType: int64
+		formatString: 0
+		lineageTag: 26457753-9636-4e17-aca2-02357b02999b
+		summarizeBy: none
+		sourceColumn: OrganizationKey
+
+		annotation SummarizationSetBy = Automatic
+
+	column ParentOrganizationKey
+		dataType: int64
+		formatString: 0
+		lineageTag: 480247ad-34dc-4d1b-b36c-cbbbbef36a8b
+		summarizeBy: count
+		sourceColumn: ParentOrganizationKey
+
+		annotation SummarizationSetBy = Automatic
+
+	column PercentageOfOwnership
+		dataType: string
+		lineageTag: 3d4f19b4-022b-4433-9f11-3f290140ab15
+		summarizeBy: none
+		sourceColumn: PercentageOfOwnership
+
+		annotation SummarizationSetBy = Automatic
+
+	column OrganizationName
+		dataType: string
+		lineageTag: 9286cbb4-3ca6-412a-89fb-15c7374ce89b
+		summarizeBy: none
+		sourceColumn: OrganizationName
+
+		annotation SummarizationSetBy = Automatic
+
+	column CurrencyKey
+		dataType: int64
+		formatString: 0
+		lineageTag: a2d28a1a-08bc-4290-b5fe-1948bee49207
+		summarizeBy: none
+		sourceColumn: CurrencyKey
+
+		annotation SummarizationSetBy = Automatic
+
+	partition DimOrganization = m
+		mode: import
+		source =
+				let
+				    Origen = Sql.Databases("localhost"),
+				    AdventureWorksDW2022 = Origen{[Name="AdventureWorksDW2022"]}[Data],
+				    dbo_DimOrganization = AdventureWorksDW2022{[Schema="dbo",Item="DimOrganization"]}[Data]
+				in
+				    dbo_DimOrganization
+
