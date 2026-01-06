@@ -1,5 +1,9 @@
 # Solucion: Filtrado Selectivo de Relaciones en Modelos Minimos
 
+**Español | [English](RELATIONSHIPS_FILTERING_SOLUTION_EN.md)**
+
+---
+
 ## Problema Original
 El usuario reportó que los modelos mínimos (subset models) generados incluían TODAS las relaciones entre tablas existentes, en lugar de incluir solo las relaciones que conectan las tablas que realmente se usan.
 

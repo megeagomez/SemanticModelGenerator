@@ -1,5 +1,9 @@
 # Cambios Realizados - Mejoras en Generación de Modelos Mínimos
 
+**Español | [English](MINIMAL_MODELS_CHANGES_EN.md)**
+
+---
+
 ## Problema 1: report.json contiene `"pages": []` vacío
 **Síntoma**: Power BI Desktop no abre reportes vacíos porque el campo `"pages": []` no debe estar presente en `report.json` si está vacío.
 

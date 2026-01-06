@@ -1,5 +1,9 @@
 # Changelog - Generación de Modelos Mínimos Power BI
 
+**Español | [English](CHANGELOG_EN.md)**
+
+---
+
 ## [2026-01-06] - Filtrado Selectivo de Relaciones y Columnas
 
 ### 🎯 Nuevas Funcionalidades
