@@ -285,7 +285,61 @@ class SemanticModel:
                 for table_name, spec in table_elements.items()
             }
         
-        # Crear configuración
+        # NUEVO: Analizar dependencias de tablas en las expresiones DAX de las medidas
+        # PRIMERO, antes de filtrar relaciones
+        # y agregar las tablas referenciadas que no están ya en el conjunto
+        measure_table_dependencies = self._extract_table_references_from_measures(
+            tables_for_relationships
+        )
+        
+        # Determinar qué tablas se usarán finalmente
+        # Cuando recursive=False: tablas iniciales + tablas detectadas en medidas
+        # Cuando recursive=True: TODAS las tablas buscadas (iniciales + relacionadas + medidas)
+        if not recursive:
+            # recursive=False: solo tablas iniciales + medidas
+            final_tables = initial_tables_only.copy()
+        else:
+            # recursive=True: todas las tablas encontradas en búsqueda recursiva
+            # (que ya están en tables_for_relationships)
+            final_tables = tables_for_relationships.copy()
+        
+        # Agregar tablas detectadas en medidas (estas sí se usan siempre, aunque sean externas)
+        if measure_table_dependencies:
+            print(f"\nTablas referenciadas en medidas DAX:")
+            for table_name, columns_used in measure_table_dependencies.items():
+                if table_name not in tables_for_relationships:
+                    print(f"  + Agregando '{table_name}' (referenciada en expresiones DAX)")
+                    print(f"    Columnas usadas: {', '.join(sorted(columns_used))}")
+                    tables_for_relationships.add(table_name)
+                    final_tables.add(table_name)  # IMPORTANTE: Agregar a final_tables también
+                    
+                    # Auto-crear especificación de elementos para esta tabla
+                    # Solo incluir las columnas usadas en las medidas + columnas de relaciones
+                    if not table_elements:
+                        table_elements = {}
+                    if table_name not in table_elements:
+                        # Incluir columnas de medidas + luego se ajustarán con relaciones
+                        table_elements[table_name] = TableElementSpec(
+                            columns=list(columns_used),
+                            measures=None,  # Incluir todas las medidas
+                            hierarchies=None,
+                            mode='include'
+                        )
+                        # Actualizar la configuración también
+                        table_elements_config[table_name] = table_elements[table_name].to_dict()
+                else:
+                    # Table is already in the search results, just add to final_tables
+                    final_tables.add(table_name)
+        
+        # AHORA sí: Filtrar relaciones para SOLO incluir relaciones donde AMBAS tablas están en final_tables
+        # Esto asegura que solo se incluyen relaciones necesarias
+        subset_relationships = []
+        for rel in self.relationships:
+            if self._relationship_involves_tables(rel, final_tables):
+                # Mantener la relación con TODAS sus propiedades originales
+                subset_relationships.append(rel)
+        
+        # Crear configuración (AHORA que final_tables está definido)
         config = {
             "name": subset_name,
             "base_model": self.base_path.name if self.base_path else "Unknown",
@@ -293,10 +347,10 @@ class SemanticModel:
                 {"name": name, "search_direction": direction} 
                 for name, direction in normalized_specs
             ],
-            "included_tables": sorted(list(tables_for_relationships)),
+            "included_tables": sorted(list(final_tables)),
             "table_search_configs": table_search_configs,
             "table_elements": table_elements_config,
-            "total_tables": len(tables_for_relationships),
+            "total_tables": len(final_tables),
             "recursive": recursive,
             "max_depth": max_depth,
             "creation_date": None
@@ -311,13 +365,19 @@ class SemanticModel:
         
         print(f"Configuración guardada en: {config_path}")
         print(f"Tablas iniciales: {len(normalized_specs)}")
-        print(f"Tablas totales (incluyendo relacionadas): {len(tables_for_relationships)}")
+        print(f"Tablas totales (incluyendo referencias en medidas): {len(final_tables)}")
         print(f"Búsqueda recursiva: {recursive}")
         
         # Mostrar configuración de tablas iniciales
         print(f"\nTablas iniciales con direcciones de búsqueda:")
         for name, direction in normalized_specs:
             print(f"  - {name}: búsqueda {direction}")
+        
+        # Identificar columnas necesarias para las relaciones
+        # Solo las relaciones que realmente se incluirán en el submodelo
+        required_columns_by_table = self._get_required_columns_for_relationships(
+            subset_relationships
+        )
         
         # Crear nuevo modelo semántico
         subset_model = SemanticModel(str(self.base_path.parent / subset_name))
@@ -328,28 +388,11 @@ class SemanticModel:
         subset_model.definition = self.definition
         subset_model.cultures = self.cultures.copy()
         
-        # CORREGIDO: Filtrar relaciones manteniendo sus propiedades originales
-        # Solo incluimos relaciones donde AMBAS tablas están en el subconjunto
-        # tables_for_relationships ya fue definido arriba
-        
-        subset_relationships = []
-        for rel in self.relationships:
-            if self._relationship_involves_tables(rel, tables_for_relationships):
-                # Mantener la relación con TODAS sus propiedades originales
-                # No modificamos cardinality, crossFilteringBehavior, etc.
-                subset_relationships.append(rel)
-        
-        # Identificar columnas necesarias para las relaciones
-        # Solo las relaciones que realmente se incluirán en el submodelo
-        required_columns_by_table = self._get_required_columns_for_relationships(
-            subset_relationships
-        )
-        
         # Filtrar y aplicar especificaciones de elementos a las tablas
-        # Solo incluir tablas que están en tables_for_relationships
+        # Solo incluir tablas que están en final_tables (tablas iniciales + detectadas en medidas)
         subset_model.tables = []
         for table in self.tables:
-            if table.name in tables_for_relationships:
+            if table.name in final_tables:
                 # Si hay especificación de elementos para esta tabla, aplicarla
                 if table_elements and table.name in table_elements:
                     spec = table_elements[table.name]
@@ -433,7 +476,6 @@ class SemanticModel:
             max_depth: Profundidad máxima permitida
         """
         if current_depth >= max_depth:
-            print(f"Advertencia: Alcanzada profundidad máxima ({max_depth})")
             return
         
         # Tablas nuevas encontradas en esta iteración
@@ -713,6 +755,98 @@ class SemanticModel:
             content_parts.append(rel.raw_content)
         
         return '\n\n'.join(content_parts)
+    
+    def _extract_columns_from_measures_in_tables(
+        self,
+        table_names: List[str]
+    ) -> Dict[str, Set[str]]:
+        """
+        Extrae columnas usadas en las MEDIDAS de las tablas especificadas.
+        Busca referencias internas: Tabla[Columna] dentro de las expresiones DAX.
+        
+        Args:
+            table_names: Lista de nombres de tablas
+        
+        Returns:
+            Diccionario {tabla: {columna1, columna2, ...}} con columnas usadas en medidas
+        """
+        import re
+        columns_by_table = {}
+        
+        for table_name in table_names:
+            table = next((t for t in self.tables if t.name == table_name), None)
+            if not table:
+                continue
+            
+            table_columns = set()
+            
+            # Analizar todas las medidas de la tabla
+            for measure in table.measures:
+                if not measure.expression:
+                    continue
+                
+                # Buscar referencias a cualquier tabla[columna]
+                # Esto incluye referencias internas (a la misma tabla)
+                pattern = r'\b([A-Za-z_][A-Za-z0-9_ ]*?)\s*\[\s*([A-Za-z_][A-Za-z0-9_ ]*?)\s*\]'
+                matches = re.findall(pattern, measure.expression)
+                
+                for ref_table, column_name in matches:
+                    ref_table = ref_table.strip()
+                    column_name = column_name.strip()
+                    
+                    # Si la referencia es a la MISMA tabla, agregar columna
+                    if ref_table == table_name:
+                        table_columns.add(column_name)
+            
+            if table_columns:
+                columns_by_table[table_name] = table_columns
+        
+        return columns_by_table
+    
+    def _extract_table_references_from_measures(
+        self, 
+        included_tables: Set[str]
+    ) -> Dict[str, Set[str]]:
+        """
+        Extrae referencias a tablas y columnas desde las expresiones DAX de las medidas
+        de las tablas incluidas en el subconjunto.
+        
+        Args:
+            included_tables: Conjunto de tablas ya incluidas en el subconjunto
+        
+        Returns:
+            Diccionario {tabla: {columna1, columna2, ...}} con referencias encontradas
+        """
+        import re
+        referenced_tables = {}  # tabla -> set de columnas
+        
+        # Iterar sobre las tablas incluidas
+        for table in self.tables:
+            if table.name not in included_tables:
+                continue
+            
+            # Analizar las expresiones de todas las medidas de la tabla
+            for measure in table.measures:
+                if not measure.expression:
+                    continue
+                
+                # Buscar referencias a tablas en el formato: NombreTabla[NombreColumna]
+                # Pattern: palabra seguida de [columna], capturando tanto tabla como columna
+                pattern = r'\b([A-Za-z_][A-Za-z0-9_ ]*?)\s*\[\s*([A-Za-z_][A-Za-z0-9_ ]*?)\s*\]'
+                matches = re.findall(pattern, measure.expression)
+                
+                for table_name, column_name in matches:
+                    table_name = table_name.strip()
+                    column_name = column_name.strip()
+                    
+                    # Verificar si es una tabla real del modelo
+                    if any(t.name == table_name for t in self.tables):
+                        if table_name not in included_tables:
+                            if table_name not in referenced_tables:
+                                referenced_tables[table_name] = set()
+                            referenced_tables[table_name].add(column_name)
+        
+        return referenced_tables
     
     def _find_directly_related_tables(self, table_name: str) -> Set[str]:
         """

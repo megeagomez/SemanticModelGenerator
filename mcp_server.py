@@ -834,6 +834,7 @@ class PowerBIModelServer:
         - Lee `definition/report.json` de cada report origen.
         - Concadena las entradas de `pages` en el `report.json` destino.
         - No copia StaticResources; solo estructura de páginas.
+        - NO incluye la clave 'pages' en report.json si está vacía (Power BI Desktop requiere esto)
         """
         target_dir = self.models_path / target_report_name / "definition"
         target_report_json_path = target_dir / "report.json"
@@ -842,8 +843,6 @@ class PowerBIModelServer:
 
         # Cargar destino
         target_data = json.loads(target_report_json_path.read_text(encoding="utf-8"))
-        if "pages" not in target_data:
-            target_data["pages"] = []
 
         # Acumular páginas
         for src in source_reports:
@@ -878,6 +877,10 @@ class PowerBIModelServer:
                 continue
 
         # Guardar destino
+        # IMPORTANTE: NO incluir 'pages' si está vacía (Power BI Desktop no abre archivos con pages: [])
+        if "pages" in target_data and not target_data["pages"]:
+            del target_data["pages"]
+        
         target_report_json_path.write_text(json.dumps(target_data, indent=2), encoding="utf-8")
     
     async def _get_table_details(self, model_name: str, table_name: str) -> list[TextContent]:
