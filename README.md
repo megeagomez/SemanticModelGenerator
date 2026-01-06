@@ -1,5 +1,9 @@
 # Power BI Semantic Model Management Library
 
+**Español | [English](README_EN.md)**
+
+---
+
 Biblioteca de Python para manipular modelos semánticos de Power BI (archivos `.SemanticModel` y `.Report`) de forma programática.
 
 ## 🚀 Características
