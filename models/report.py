@@ -603,8 +603,10 @@ class Page(FilterMixin):
 class clsReport(FilterMixin):
     """Clase principal para cargar y representar un informe completo."""
 
-    def __init__(self, root_path: str):
+    def __init__(self, root_path: str, report_id: str = None, workspace_id: str = None):
         self.root_path = root_path
+        self.report_id = report_id  # ID del reporte desde Microsoft Fabric
+        self.workspace_id = workspace_id  # ID del workspace desde Microsoft Fabric
         self.report_path = self._find_report_json()
         self.pages_path = os.path.join(os.path.dirname(self.report_path), 'pages') if self.report_path else None
         
@@ -621,6 +623,7 @@ class clsReport(FilterMixin):
         self.allfilters = []
         self.pages: List[Page] = []
         self.SemanticModel = ""
+        self.semantic_model_id = None
         
         if self.report_path:
             self._load_report_json()
@@ -644,6 +647,10 @@ class clsReport(FilterMixin):
         # Caso 1: byConnection
         if "byConnection" in dataset_ref:
             connection_string = dataset_ref["byConnection"].get("connectionString", "")
+            # Extraer ID del modelo semántico
+            id_match = re.search(r'semanticmodelid=([a-f0-9\-]+)', connection_string)
+            if id_match:
+                self.semantic_model_id = id_match.group(1)
             match = re.search(r'Data Source="powerbi://api\.powerbi\.com/v1\.0/myorg/(.*?)"', connection_string)
             if match:
                 return match.group(1)
@@ -730,5 +737,203 @@ class clsReport(FilterMixin):
                     table_measures[table].add(measure)
         return dict(table_measures)
 
+    def save_to_database(self, connection):
+        """
+        Guarda el reporte en DuckDB.
+        
+        Args:
+            connection: Conexión DuckDB (duckdb.DuckDBPyConnection)
+        """
+        # Obtener nombre del reporte desde la ruta si SemanticModel está vacío
+        report_name = self.SemanticModel if self.SemanticModel else os.path.basename(self.root_path)
+        if not report_name:
+            report_name = "unknown_report"
+        
+        # Crear secuencias si no existen
+        connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_report_id START 1")
+        connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_report_page_id START 1")
+        connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_report_visual_id START 1")
+        connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_report_column_id START 1")
+        connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_report_measure_id START 1")
+        
+        # Dropear tabla antigua si existe (para actualizar esquema)
+        connection.execute("DROP TABLE IF EXISTS report")
+        
+        # Crear tabla report
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS report (
+                id INTEGER PRIMARY KEY DEFAULT nextval('seq_report_id'),
+                name VARCHAR NOT NULL,
+                report_id VARCHAR,
+                workspace_id VARCHAR,
+                semantic_model_reference VARCHAR,
+                schema VARCHAR,
+                active_page_name VARCHAR,
+                theme_collection JSON,
+                filter_config JSON,
+                created_at TIMESTAMP DEFAULT now(),
+                updated_at TIMESTAMP DEFAULT now()
+            )
+        """)
+        
+        # Insertar reporte
+        connection.execute("""
+            INSERT INTO report (name, report_id, workspace_id, semantic_model_reference, schema, active_page_name, theme_collection, filter_config)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, [
+            report_name,
+            self.report_id,
+            self.workspace_id,
+            self.semantic_model_id,
+            self.schema,
+            self.activePageName,
+            json.dumps(self.themeCollection) if self.themeCollection else None,
+            json.dumps(self.filterConfig) if self.filterConfig else None
+        ])
+        
+        # Crear tabla report_page
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS report_page (
+                id INTEGER PRIMARY KEY DEFAULT nextval('seq_report_page_id'),
+                report_name VARCHAR NOT NULL,
+                name VARCHAR NOT NULL,
+                display_name VARCHAR,
+                height INTEGER,
+                width INTEGER,
+                display_option VARCHAR,
+                created_at TIMESTAMP DEFAULT now()
+            )
+        """)
+        
+        # Insertar páginas
+        for page in self.pages:
+            connection.execute("""
+                INSERT INTO report_page (report_name, name, display_name, height, width, display_option)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, [
+                report_name,
+                page.name,
+                page.displayName,
+                page.height,
+                page.width,
+                page.displayOption
+            ])
+            
+            # Crear tabla report_visual
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS report_visual (
+                    id INTEGER PRIMARY KEY DEFAULT nextval('seq_report_visual_id'),
+                    page_name VARCHAR NOT NULL,
+                    report_name VARCHAR NOT NULL,
+                    name VARCHAR NOT NULL,
+                    visual_type VARCHAR,
+                    position_x FLOAT,
+                    position_y FLOAT,
+                    position_width FLOAT,
+                    position_height FLOAT,
+                    text_content TEXT,
+                    navigation_target VARCHAR,
+                    created_at TIMESTAMP DEFAULT now()
+                )
+            """)
+            
+            # Insertar visuals de la página
+            for visual in page.visuals:
+                connection.execute("""
+                    INSERT INTO report_visual (page_name, report_name, name, visual_type, position_x, position_y, position_width, position_height, text_content, navigation_target)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, [
+                    page.name,
+                    report_name,
+                    visual.name,
+                    visual.visualType,
+                    visual.position.get('x'),
+                    visual.position.get('y'),
+                    visual.position.get('width'),
+                    visual.position.get('height'),
+                    visual.text,
+                    visual.navigationTarget
+                ])
+        
+        # Insertar columnas usadas (con relación a reportvisual)
+        columns_used = self.get_all_columns_used()
+        # Dropear tabla antigua si existe (para actualizar esquema)
+        connection.execute("DROP TABLE IF EXISTS report_column_used")
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS report_column_used (
+                id INTEGER PRIMARY KEY DEFAULT nextval('seq_report_column_id'),
+                report_id INTEGER NOT NULL,
+                page_name VARCHAR NOT NULL,
+                visual_name VARCHAR NOT NULL,
+                table_name VARCHAR NOT NULL,
+                column_name VARCHAR NOT NULL,
+                usage_count INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT now(),
+                FOREIGN KEY(report_id) REFERENCES report(id)
+            )
+        """)
+        
+        # Obtener report_id
+        report_id_result = connection.execute("SELECT id FROM report WHERE name = ?", [report_name]).fetchall()
+        report_id = report_id_result[0][0] if report_id_result else 1
+        
+        # Insertar columnas usadas por cada visual
+        for page in self.pages:
+            for visual in page.visuals:
+                # Agrupar columnas usadas en este visual
+                visual_columns = {}
+                for col_ref in visual.columns_used:
+                    if '.' in col_ref:
+                        parts = col_ref.split('.')
+                        table = parts[0]
+                        col = '.'.join(parts[1:])
+                        key = (table, col)
+                        visual_columns[key] = visual_columns.get(key, 0) + 1
+                
+                # Insertar cada columna con su contador
+                for (table, col), count in visual_columns.items():
+                    connection.execute("""
+                        INSERT INTO report_column_used (report_id, page_name, visual_name, table_name, column_name, usage_count)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, [report_id, page.name, visual.name, table, col, count])
+        
+        # Insertar medidas usadas (con relación a report_visual)
+        measures_used = self.get_all_measures_used()
+        # Dropear tabla antigua si existe (para actualizar esquema)
+        connection.execute("DROP TABLE IF EXISTS report_measure_used")
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS report_measure_used (
+                id INTEGER PRIMARY KEY DEFAULT nextval('seq_report_measure_id'),
+                report_id INTEGER NOT NULL,
+                page_name VARCHAR NOT NULL,
+                visual_name VARCHAR NOT NULL,
+                table_name VARCHAR NOT NULL,
+                measure_name VARCHAR NOT NULL,
+                usage_count INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT now(),
+                FOREIGN KEY(report_id) REFERENCES report(id)
+            )
+        """)
+        
+        # Insertar medidas usadas por cada visual
+        for page in self.pages:
+            for visual in page.visuals:
+                # Agrupar medidas usadas en este visual
+                visual_measures = {}
+                for measure_ref in visual.measures_used:
+                    if '.' in measure_ref:
+                        parts = measure_ref.split('.')
+                        table = parts[0]
+                        measure = '.'.join(parts[1:])
+                        key = (table, measure)
+                        visual_measures[key] = visual_measures.get(key, 0) + 1
+                
+                # Insertar cada medida con su contador
+                for (table, measure), count in visual_measures.items():
+                    connection.execute("""
+                        INSERT INTO report_measure_used (report_id, page_name, visual_name, table_name, measure_name, usage_count)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, [report_id, page.name, visual.name, table, measure, count])
+
     def __repr__(self):
-        return f"clsReport(model={self.SemanticModel}, pages={len(self.pages)})"
+        return f"clsReport(model={self.SemanticModel}, model_id={self.semantic_model_id}, pages={len(self.pages)})"

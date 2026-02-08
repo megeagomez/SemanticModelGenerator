@@ -1,0 +1,20 @@
+{
+  "workspaces": [
+    {
+      "id": "9ddd1f21-d677-4d06-b874-94da9ff8cf89",
+      "name": "beacicd",
+      "reports": [
+        {
+          "id": "a0bdee75-7946-4105-8078-7954b24663d1",
+          "name": "ad"
+        }
+      ],
+      "semantic_models": [
+        {
+          "id": "d0fe5836-1a09-4c35-8406-1c31c264beb9",
+          "name": "ad"
+        }
+      ]
+    }
+  ]
+}

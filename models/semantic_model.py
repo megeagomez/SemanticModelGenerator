@@ -1,6 +1,7 @@
 from typing import List, Optional, Set, Tuple, Literal, Dict
 from pathlib import Path
 import json
+import os
 from enum import Enum
 
 from .model import Model
@@ -57,8 +58,10 @@ class SemanticModel:
     Mantiene la estructura de carpetas y archivos originales.
     """
     
-    def __init__(self, base_path: str):
+    def __init__(self, base_path: str, semantic_model_id: str = None, workspace_id: str = None):
         self.base_path = Path(base_path)
+        self.semantic_model_id = semantic_model_id  # ID del modelo semántico desde Microsoft Fabric
+        self.workspace_id = workspace_id  # ID del workspace desde Microsoft Fabric
         self.model: Optional[Model] = None
         self.relationships: List[Relationship] = []
         self.tables: List[Table] = []
@@ -879,3 +882,155 @@ class SemanticModel:
                 related_tables.add(rel.from_table)
         
         return related_tables
+
+    def save_to_database(self, connection):
+        """
+        Guarda el modelo semántico completo en DuckDB.
+        
+        Args:
+            connection: Conexión DuckDB (duckdb.DuckDBPyConnection)
+        """
+        import json
+        
+        # Si no hay modelo cargado, no guardar
+        if not self.model:
+            return
+        
+        # Crear secuencias
+        connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_semantic_model_id START 1")
+        connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_semantic_model_table_id START 1")
+        connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_semantic_model_column_id START 1")
+        connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_semantic_model_measure_id START 1")
+        
+        # Dropear tabla antigua si existe (para actualizar esquema)
+        connection.execute("DROP TABLE IF EXISTS semantic_model")
+        
+        # Crear tabla semantic_model
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS semantic_model (
+                id INTEGER PRIMARY KEY DEFAULT nextval('seq_semantic_model_id'),
+                semantic_model_id VARCHAR,
+                workspace_id VARCHAR,
+                name VARCHAR NOT NULL,
+                culture VARCHAR,
+                default_power_bi_data_source_version VARCHAR,
+                source_query_culture VARCHAR,
+                data_access_options JSON,
+                annotations JSON,
+                created_at TIMESTAMP DEFAULT now(),
+                updated_at TIMESTAMP DEFAULT now()
+            )
+        """)
+        
+        # Insertar modelo principal
+        model_name = self.model.name if self.model.name else "unknown"
+        if not model_name or model_name == "unknown":
+            # Si el nombre es desconocido, usar la ruta
+            model_name = os.path.basename(str(self.base_path))
+        model_culture = self.model.culture if self.model else None
+        model_data_access = json.dumps(self.model.data_access_options) if self.model and self.model.data_access_options else None
+        model_annotations = json.dumps(self.model.annotations) if self.model and self.model.annotations else None
+        
+        connection.execute("""
+            INSERT INTO semantic_model (semantic_model_id, workspace_id, name, culture, default_power_bi_data_source_version, source_query_culture, data_access_options, annotations)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, [
+            self.semantic_model_id,
+            self.workspace_id,
+            model_name,
+            model_culture,
+            self.model.default_power_bi_data_source_version if self.model else None,
+            self.model.source_query_culture if self.model else None,
+            model_data_access,
+            model_annotations
+        ])
+        
+        # Obtener ID del modelo insertado
+        result = connection.execute("SELECT id FROM semantic_model WHERE name = ?", [model_name]).fetchall()
+        semantic_model_id = result[0][0] if result else 1
+        
+        # Crear tabla semantic_model_table
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS semantic_model_table (
+                id INTEGER PRIMARY KEY DEFAULT nextval('seq_semantic_model_table_id'),
+                semantic_model_id INTEGER NOT NULL,
+                table_name VARCHAR NOT NULL,
+                is_hidden BOOLEAN DEFAULT FALSE,
+                annotations JSON,
+                created_at TIMESTAMP DEFAULT now(),
+                FOREIGN KEY(semantic_model_id) REFERENCES semantic_model(id)
+            )
+        """)
+        
+        # Crear tabla semantic_model_column
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS semantic_model_column (
+                id INTEGER PRIMARY KEY DEFAULT nextval('seq_semantic_model_column_id'),
+                semantic_model_id INTEGER NOT NULL,
+                table_name VARCHAR NOT NULL,
+                column_name VARCHAR NOT NULL,
+                data_type VARCHAR,
+                summarize_by VARCHAR,
+                is_hidden BOOLEAN DEFAULT FALSE,
+                format_string VARCHAR,
+                created_at TIMESTAMP DEFAULT now(),
+                FOREIGN KEY(semantic_model_id) REFERENCES semantic_model(id)
+            )
+        """)
+        
+        # Crear tabla semantic_model_measure
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS semantic_model_measure (
+                id INTEGER PRIMARY KEY DEFAULT nextval('seq_semantic_model_measure_id'),
+                semantic_model_id INTEGER NOT NULL,
+                table_name VARCHAR NOT NULL,
+                measure_name VARCHAR NOT NULL,
+                expression TEXT,
+                format_string VARCHAR,
+                is_hidden BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT now(),
+                FOREIGN KEY(semantic_model_id) REFERENCES semantic_model(id)
+            )
+        """)
+        
+        # Insertar tablas, columnas y medidas
+        for table in self.tables:
+            # Insertar tabla
+            connection.execute("""
+                INSERT INTO semantic_model_table (semantic_model_id, table_name, is_hidden, annotations)
+                VALUES (?, ?, ?, ?)
+            """, [
+                semantic_model_id,
+                table.name,
+                table.is_hidden,
+                json.dumps(table.annotations) if table.annotations else None
+            ])
+            
+            # Insertar columnas
+            for column in table.columns:
+                connection.execute("""
+                    INSERT INTO semantic_model_column (semantic_model_id, table_name, column_name, data_type, summarize_by, is_hidden, format_string)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, [
+                    semantic_model_id,
+                    table.name,
+                    column.name,
+                    column.data_type,
+                    column.summarize_by,
+                    column.is_hidden,
+                    column.format_string
+                ])
+            
+            # Insertar medidas
+            for measure in table.measures:
+                connection.execute("""
+                    INSERT INTO semantic_model_measure (semantic_model_id, table_name, measure_name, expression, format_string, is_hidden)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, [
+                    semantic_model_id,
+                    table.name,
+                    measure.name,
+                    measure.expression,
+                    measure.format_string,
+                    measure.is_hidden
+                ])

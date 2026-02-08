@@ -1,3 +1,7 @@
+# Salida de serialización
+output/
+# Datos descargados y bases de datos
+data/
 # Python
 __pycache__/
 *.py[cod]

@@ -1,0 +1,32 @@
+relationship c79a882a-c4cb-4d1e-94d2-307e6452690b
+	fromColumn: InternetSales.CustomerKey
+	toColumn: Customer.CustomerKey
+
+	annotation PBI_IsFromSource = FS
+
+relationship 79c2a914-b83a-422c-90b1-fbbda789da87
+	fromColumn: InternetSales.'Fecha entrega'
+	toColumn: DimDate.DateKey
+
+	annotation PBI_IsFromSource = FS
+
+relationship 9f7867ba-275f-40ae-9d41-66e806ed9144
+	isActive: false
+	fromColumn: InternetSales.OrderDateKey
+	toColumn: DimDate.DateKey
+
+	annotation PBI_IsFromSource = FS
+
+relationship 0b349d20-cc4c-4710-900b-e11ef45617d8
+	isActive: false
+	fromColumn: InternetSales.ShipDateKey
+	toColumn: DimDate.DateKey
+
+	annotation PBI_IsFromSource = FS
+
+relationship e433a293-0217-4c96-a786-b6a98329d53b
+	fromColumn: InternetSales.ProductKey
+	toColumn: Product.ProductKey
+
+	annotation PBI_IsFromSource = FS
+
