@@ -756,7 +756,11 @@ class clsReport(FilterMixin):
         connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_report_column_id START 1")
         connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_report_measure_id START 1")
         
-        # Dropear tabla antigua si existe (para actualizar esquema)
+        # Dropear tablas antiguas si existen (en orden de dependencias, desde dependientes a padre)
+        connection.execute("DROP TABLE IF EXISTS report_column_used")
+        connection.execute("DROP TABLE IF EXISTS report_measure_used")
+        connection.execute("DROP TABLE IF EXISTS report_page")
+        connection.execute("DROP TABLE IF EXISTS report_visual")
         connection.execute("DROP TABLE IF EXISTS report")
         
         # Crear tabla report

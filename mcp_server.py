@@ -24,7 +24,48 @@ MODELS_PATH = Path(__file__).parent / "Modelos"
 
 class PowerBIModelServer:
     """Servidor MCP para gestión de modelos semánticos de Power BI"""
-    
+
+    async def _powerbi_login_interactive(self) -> list[TextContent]:
+        """Inicia el login interactivo a Power BI y devuelve el link y el código para autenticarse."""
+        try:
+            from Importer.src.import_from_powerbi import start_device_flow_interactive
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error importando módulo de login: {e}")]
+
+        try:
+            result = start_device_flow_interactive()
+            
+            if not result["success"]:
+                return [TextContent(type="text", text=f"❌ Error iniciando login: {result['message']}")]
+            
+            if result.get("already_authenticated"):
+                return [TextContent(type="text", text=f"✅ {result['message']}")]
+            
+            # Formatear el mensaje para que sea más claro
+            message = result["message"]
+            return [TextContent(type="text", text=f"🔐 Para autenticarte en Power BI:\n\n{message}\n\n⚠️ IMPORTANTE: Abre el enlace en tu navegador e introduce el código. La autenticación se completará automáticamente en segundo plano.")]
+            
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error durante el login interactivo: {e}")]
+
+    async def _powerbi_check_auth_status(self) -> list[TextContent]:
+        """Verifica el estado de la autenticación de Power BI."""
+        try:
+            from Importer.src.import_from_powerbi import check_auth_status
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error importando módulo: {e}")]
+
+        try:
+            result = check_auth_status()
+            
+            if result["authenticated"]:
+                return [TextContent(type="text", text=f"✅ {result['message']}")]
+            else:
+                return [TextContent(type="text", text=f"⏳ {result['message']}")]
+            
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error verificando estado: {e}")]
+
     def __init__(self, models_path: Path):
         self.models_path = models_path
         self.server = Server("powerbi-semantic-model")
@@ -50,8 +91,24 @@ class PowerBIModelServer:
                         },
                         "required": ["path"]
                     }
+                ), Tool(
+                                        name="powerbi_login_interactive",
+                                        description="Inicia el login interactivo a Power BI (device code flow) y devuelve el link y el código para autenticarse. Es necesario completar este paso antes de importar modelos desde Power BI.",
+                                        inputSchema={
+                                            "type": "object",
+                                            "properties": {},
+                                        }
+                                    ),
+                Tool(
+                    name="powerbi_check_auth_status",
+                    description="Verifica el estado de la autenticación de Power BI. Usa este comando para confirmar que el login se completó exitosamente.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {},
+                    }
                 ),
                 Tool(
+                                   
                     name="list_semantic_models",
                     description="Lista todos los modelos semánticos disponibles (.SemanticModel)",
                     inputSchema={
@@ -260,6 +317,12 @@ class PowerBIModelServer:
 
             if name == "list_semantic_models":
                 return await self._list_semantic_models()
+
+            if name == "powerbi_login_interactive":
+                return await self._powerbi_login_interactive()
+            
+            if name == "powerbi_check_auth_status":
+                return await self._powerbi_check_auth_status()
             
             elif name == "get_model_info":
                 return await self._get_model_info(arguments["model_name"])

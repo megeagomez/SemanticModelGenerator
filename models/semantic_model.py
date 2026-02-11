@@ -902,7 +902,10 @@ class SemanticModel:
         connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_semantic_model_column_id START 1")
         connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_semantic_model_measure_id START 1")
         
-        # Dropear tabla antigua si existe (para actualizar esquema)
+        # Dropear tablas antiguas si existen (en orden de dependencias, desde dependientes a padre)
+        connection.execute("DROP TABLE IF EXISTS semantic_model_column")
+        connection.execute("DROP TABLE IF EXISTS semantic_model_measure")
+        connection.execute("DROP TABLE IF EXISTS semantic_model_table")
         connection.execute("DROP TABLE IF EXISTS semantic_model")
         
         # Crear tabla semantic_model
