@@ -164,6 +164,88 @@ def check_auth_status():
             return {"authenticated": False, "message": "❌ El login no se completó o expiró. Intenta nuevamente."}
 
 
+def get_authenticated_downloader():
+    """Obtiene una instancia de FabricItemDownloader autenticada."""
+    # Intentar reutilizar el downloader del auth flow
+    if _active_auth_flow.get("downloader") and _active_auth_flow["downloader"].access_token:
+        return _active_auth_flow["downloader"]
+    
+    # Si no, crear uno nuevo e intentar cargar el token del cache
+    downloader = FabricItemDownloader()
+    cached_token = downloader.load_token_from_file()
+    if cached_token:
+        downloader.access_token = cached_token
+        return downloader
+    
+    # No hay token disponible
+    return None
+
+
+def powerbi_list_workspaces():
+    """Lista todos los workspaces disponibles."""
+    downloader = get_authenticated_downloader()
+    if not downloader:
+        return {"success": False, "message": "⚠️ No estás autenticado. Ejecuta powerbi_login_interactive primero."}
+    
+    try:
+        workspaces = downloader.list_workspaces()
+        return {"success": True, "workspaces": workspaces}
+    except Exception as e:
+        return {"success": False, "message": f"❌ Error listando workspaces: {str(e)}"}
+
+
+def powerbi_list_reports(workspace_id: str):
+    """Lista todos los reportes de un workspace."""
+    downloader = get_authenticated_downloader()
+    if not downloader:
+        return {"success": False, "message": "⚠️ No estás autenticado. Ejecuta powerbi_login_interactive primero."}
+    
+    try:
+        reports = downloader.list_reports(workspace_id)
+        return {"success": True, "reports": reports}
+    except Exception as e:
+        return {"success": False, "message": f"❌ Error listando reportes: {str(e)}"}
+
+
+def powerbi_list_semantic_models(workspace_id: str):
+    """Lista todos los modelos semánticos de un workspace."""
+    downloader = get_authenticated_downloader()
+    if not downloader:
+        return {"success": False, "message": "⚠️ No estás autenticado. Ejecuta powerbi_login_interactive primero."}
+    
+    try:
+        models = downloader.list_semantic_models(workspace_id)
+        return {"success": True, "models": models}
+    except Exception as e:
+        return {"success": False, "message": f"❌ Error listando modelos semánticos: {str(e)}"}
+
+
+def powerbi_download_report(workspace_id: str, report_id: str, output_folder: str = "data"):
+    """Descarga un reporte de Power BI."""
+    downloader = get_authenticated_downloader()
+    if not downloader:
+        return {"success": False, "message": "⚠️ No estás autenticado. Ejecuta powerbi_login_interactive primero."}
+    
+    try:
+        downloader.download(workspace_id, report_id, output_folder)
+        return {"success": True, "message": f"✅ Reporte descargado exitosamente en {output_folder}"}
+    except Exception as e:
+        return {"success": False, "message": f"❌ Error descargando reporte: {str(e)}"}
+
+
+def powerbi_download_semantic_model(workspace_id: str, semantic_model_id: str, output_folder: str = "data"):
+    """Descarga un modelo semántico de Power BI."""
+    downloader = get_authenticated_downloader()
+    if not downloader:
+        return {"success": False, "message": "⚠️ No estás autenticado. Ejecuta powerbi_login_interactive primero."}
+    
+    try:
+        downloader.download_semantic_model(workspace_id, semantic_model_id, output_folder)
+        return {"success": True, "message": f"✅ Modelo semántico descargado exitosamente en {output_folder}"}
+    except Exception as e:
+        return {"success": False, "message": f"❌ Error descargando modelo semántico: {str(e)}"}
+
+
 def ExecuteDax(fabric_item_downloader, dataset_id: str, payload: dict):
     """
     Ejecuta un query DAX contra un dataset en Power BI
@@ -409,7 +491,7 @@ class PowerBIImporter:
                     semantic_model_obj = SemanticModel(model_base_path, semantic_model_id=model_id, workspace_id=workspace_id)
                     semantic_model_obj.load_from_directory(Path(model_base_path))
                     semantic_model_obj.save_to_database(conn)
-                    get_calc_dependencies_paginated(self.fabric_item_downloader, model_id, model_name)
+                    #get_calc_dependencies_paginated(self.fabric_item_downloader, model_id, model_name)
                     with open(os.path.join(output_dir, f"{workspace_name}__{model_name}__semantic_model.pkl"), "wb") as pf:
                         pickle.dump(semantic_model_obj, pf)
                 except Exception as e:
