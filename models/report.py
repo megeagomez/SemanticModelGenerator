@@ -756,14 +756,7 @@ class clsReport(FilterMixin):
         connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_report_column_id START 1")
         connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_report_measure_id START 1")
         
-        # Dropear tablas antiguas si existen (en orden de dependencias, desde dependientes a padre)
-        connection.execute("DROP TABLE IF EXISTS report_column_used")
-        connection.execute("DROP TABLE IF EXISTS report_measure_used")
-        connection.execute("DROP TABLE IF EXISTS report_page")
-        connection.execute("DROP TABLE IF EXISTS report_visual")
-        connection.execute("DROP TABLE IF EXISTS report")
-        
-        # Crear tabla report
+        # Crear tabla report (sin dropear, para acumular múltiples reportes)
         connection.execute("""
             CREATE TABLE IF NOT EXISTS report (
                 id INTEGER PRIMARY KEY DEFAULT nextval('seq_report_id'),
@@ -795,6 +788,21 @@ class clsReport(FilterMixin):
             json.dumps(self.filterConfig) if self.filterConfig else None
         ])
         
+        # Obtener report_id (usar report_id si existe, sino usar nombre)
+        report_id_result = connection.execute("SELECT id FROM report WHERE report_id = ?", [self.report_id]).fetchall()
+        report_id = report_id_result[0][0] if report_id_result else None
+        
+        if not report_id:
+            # Alternativa: buscar por nombre si report_id falla
+            report_id_result = connection.execute("SELECT id FROM report WHERE name = ?", [report_name]).fetchall()
+            report_id = report_id_result[0][0] if report_id_result else None
+        
+        if not report_id:
+            print(f"⚠️ No se pudo obtener el ID del reporte {report_name}")
+            return
+        
+        # CREAR TODAS LAS TABLAS PRIMERO (antes de hacer DELETEs)
+        
         # Crear tabla report_page
         connection.execute("""
             CREATE TABLE IF NOT EXISTS report_page (
@@ -809,60 +817,27 @@ class clsReport(FilterMixin):
             )
         """)
         
-        # Insertar páginas
-        for page in self.pages:
-            connection.execute("""
-                INSERT INTO report_page (report_name, name, display_name, height, width, display_option)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, [
-                report_name,
-                page.name,
-                page.displayName,
-                page.height,
-                page.width,
-                page.displayOption
-            ])
-            
-            # Crear tabla report_visual
-            connection.execute("""
-                CREATE TABLE IF NOT EXISTS report_visual (
-                    id INTEGER PRIMARY KEY DEFAULT nextval('seq_report_visual_id'),
-                    page_name VARCHAR NOT NULL,
-                    report_name VARCHAR NOT NULL,
-                    name VARCHAR NOT NULL,
-                    visual_type VARCHAR,
-                    position_x FLOAT,
-                    position_y FLOAT,
-                    position_width FLOAT,
-                    position_height FLOAT,
-                    text_content TEXT,
-                    navigation_target VARCHAR,
-                    created_at TIMESTAMP DEFAULT now()
-                )
-            """)
-            
-            # Insertar visuals de la página
-            for visual in page.visuals:
-                connection.execute("""
-                    INSERT INTO report_visual (page_name, report_name, name, visual_type, position_x, position_y, position_width, position_height, text_content, navigation_target)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, [
-                    page.name,
-                    report_name,
-                    visual.name,
-                    visual.visualType,
-                    visual.position.get('x'),
-                    visual.position.get('y'),
-                    visual.position.get('width'),
-                    visual.position.get('height'),
-                    visual.text,
-                    visual.navigationTarget
-                ])
+        # Crear tabla report_visual (UNA SOLA VEZ, antes de insertar datos)
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS report_visual (
+                id INTEGER PRIMARY KEY DEFAULT nextval('seq_report_visual_id'),
+                report_id INTEGER NOT NULL,
+                page_name VARCHAR NOT NULL,
+                report_name VARCHAR NOT NULL,
+                name VARCHAR NOT NULL,
+                visual_type VARCHAR,
+                position_x FLOAT,
+                position_y FLOAT,
+                position_width FLOAT,
+                position_height FLOAT,
+                text_content TEXT,
+                navigation_target VARCHAR,
+                created_at TIMESTAMP DEFAULT now(),
+                FOREIGN KEY(report_id) REFERENCES report(id)
+            )
+        """)
         
-        # Insertar columnas usadas (con relación a reportvisual)
-        columns_used = self.get_all_columns_used()
-        # Dropear tabla antigua si existe (para actualizar esquema)
-        connection.execute("DROP TABLE IF EXISTS report_column_used")
+        # Crear tabla report_column_used
         connection.execute("""
             CREATE TABLE IF NOT EXISTS report_column_used (
                 id INTEGER PRIMARY KEY DEFAULT nextval('seq_report_column_id'),
@@ -877,9 +852,62 @@ class clsReport(FilterMixin):
             )
         """)
         
-        # Obtener report_id
-        report_id_result = connection.execute("SELECT id FROM report WHERE name = ?", [report_name]).fetchall()
-        report_id = report_id_result[0][0] if report_id_result else 1
+        # Crear tabla report_measure_used
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS report_measure_used (
+                id INTEGER PRIMARY KEY DEFAULT nextval('seq_report_measure_id'),
+                report_id INTEGER NOT NULL,
+                page_name VARCHAR NOT NULL,
+                visual_name VARCHAR NOT NULL,
+                table_name VARCHAR NOT NULL,
+                measure_name VARCHAR NOT NULL,
+                usage_count INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT now(),
+                FOREIGN KEY(report_id) REFERENCES report(id)
+            )
+        """)
+        
+        # AHORA SÍ: Limpiar datos antiguos de este reporte (sin dropear las tablas completas)
+        connection.execute("DELETE FROM report_measure_used WHERE report_id = ?", [report_id])
+        connection.execute("DELETE FROM report_column_used WHERE report_id = ?", [report_id])
+        connection.execute("DELETE FROM report_visual WHERE report_id = ?", [report_id])
+        connection.execute("DELETE FROM report_page WHERE report_name = ?", [report_name])
+        
+        # Insertar páginas e visuals
+        for page in self.pages:
+            connection.execute("""
+                INSERT INTO report_page (report_name, name, display_name, height, width, display_option)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, [
+                report_name,
+                page.name,
+                page.displayName,
+                page.height,
+                page.width,
+                page.displayOption
+            ])
+            
+            # Insertar visuals de la página
+            for visual in page.visuals:
+                connection.execute("""
+                    INSERT INTO report_visual (report_id, page_name, report_name, name, visual_type, position_x, position_y, position_width, position_height, text_content, navigation_target)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, [
+                    report_id,
+                    page.name,
+                    report_name,
+                    visual.name,
+                    visual.visualType,
+                    visual.position.get('x'),
+                    visual.position.get('y'),
+                    visual.position.get('width'),
+                    visual.position.get('height'),
+                    visual.text,
+                    visual.navigationTarget
+                ])
+        
+        # Insertar columnas usadas (con relación a report_visual)
+        columns_used = self.get_all_columns_used()
         
         # Insertar columnas usadas por cada visual
         for page in self.pages:
@@ -903,21 +931,6 @@ class clsReport(FilterMixin):
         
         # Insertar medidas usadas (con relación a report_visual)
         measures_used = self.get_all_measures_used()
-        # Dropear tabla antigua si existe (para actualizar esquema)
-        connection.execute("DROP TABLE IF EXISTS report_measure_used")
-        connection.execute("""
-            CREATE TABLE IF NOT EXISTS report_measure_used (
-                id INTEGER PRIMARY KEY DEFAULT nextval('seq_report_measure_id'),
-                report_id INTEGER NOT NULL,
-                page_name VARCHAR NOT NULL,
-                visual_name VARCHAR NOT NULL,
-                table_name VARCHAR NOT NULL,
-                measure_name VARCHAR NOT NULL,
-                usage_count INTEGER DEFAULT 1,
-                created_at TIMESTAMP DEFAULT now(),
-                FOREIGN KEY(report_id) REFERENCES report(id)
-            )
-        """)
         
         # Insertar medidas usadas por cada visual
         for page in self.pages:

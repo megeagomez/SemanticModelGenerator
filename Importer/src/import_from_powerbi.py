@@ -478,24 +478,39 @@ class PowerBIImporter:
         
         # Crear conexión DuckDB
         db_path = os.path.join(destination_path, f"{db_name}.duckdb")
+        os.makedirs(destination_path, exist_ok=True)
         conn = duckdb.connect(db_path)
+        logger.info(f"📊 Base de datos DuckDB creada en: {db_path}")
+        
+        logger.info(f"📥 Procesando {len(semantic_models)} modelos semánticos...")
         for model in semantic_models:
             model_id = model.get("id")
             model_name = model.get("displayName", model_id)
+            logger.info(f"📥 Descargando modelo: {model_name}...")
             ws_entry["semantic_models"].append({"id": model_id, "name": model_name})
             self.fabric_item_downloader.download_semantic_model(workspace_id, model_id, output_folder=destination_path)
             # Parsear y serializar
-            model_base_path = os.path.join(destination_path, workspace_name, model_name)
+            # Los archivos se descargan en formato: {destination_path}/{workspace_name}/{proyecto}.SemanticModel/
+            safe_workspace_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in workspace_name.strip())
+            safe_model_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in model_name.strip())
+            model_base_path = os.path.join(destination_path, safe_workspace_name, f"{safe_model_name}.SemanticModel")
+            logger.info(f"🔍 Buscando archivos del modelo en: {model_base_path}")
             if os.path.exists(model_base_path):
                 try:
+                    logger.info(f"✅ Parseando modelo {model_name}...")
                     semantic_model_obj = SemanticModel(model_base_path, semantic_model_id=model_id, workspace_id=workspace_id)
                     semantic_model_obj.load_from_directory(Path(model_base_path))
                     semantic_model_obj.save_to_database(conn)
                     #get_calc_dependencies_paginated(self.fabric_item_downloader, model_id, model_name)
                     with open(os.path.join(output_dir, f"{workspace_name}__{model_name}__semantic_model.pkl"), "wb") as pf:
                         pickle.dump(semantic_model_obj, pf)
+                    logger.info(f"✅ Modelo {model_name} procesado correctamente")
                 except Exception as e:
+                    logger.error(f"❌ Error parseando/serializando modelo {model_name}: {e}")
                     print(f"Error parseando/serializando modelo {model_name}: {e}")
+            else:
+                logger.error(f"❌ Carpeta del modelo no encontrada: {model_base_path}")
+                print(f"⚠️ Carpeta del modelo no encontrada: {model_base_path}")
         
         # Consultar y guardar CALC_DEPENDENCIES (solo si workspace es Premium/PPU)
         # NOTA: DISCOVER_CALC_DEPENDENCIES es un DMV y actualmente no está disponible
@@ -507,20 +522,33 @@ class PowerBIImporter:
         # Descargar reports y parsear/serializar
         reports = self.fabric_item_downloader.list_reports(workspace_id)
         ws_entry["reports"] = []
+        logger.info(f"📥 Procesando {len(reports)} reportes...")
         for report in reports:
             report_id = report.get("id")
             report_name = report.get("displayName", report_id)
+            logger.info(f"📥 Descargando reporte: {report_name}...")
             ws_entry["reports"].append({"id": report_id, "name": report_name})
             self.fabric_item_downloader.download(workspace_id, report_id, output_folder=destination_path)
             # Parsear y serializar
-            report_folder = os.path.join(destination_path, workspace_name, report_name)
-            try:
-                report_obj = clsReport(report_folder, report_id=report_id, workspace_id=workspace_id)
-                report_obj.save_to_database(conn)
-                with open(os.path.join(output_dir, f"{workspace_name}__{report_name}__report.pkl"), "wb") as pf:
-                    pickle.dump(report_obj, pf)
-            except Exception as e:
-                print(f"Error parseando/serializando report {report_name}: {e}")
+            # Los archivos se descargan en formato: {destination_path}/{workspace_name}/{proyecto}.Report/
+            safe_workspace_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in workspace_name.strip())
+            safe_report_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in report_name.strip())
+            report_folder = os.path.join(destination_path, safe_workspace_name, f"{safe_report_name}.Report")
+            logger.info(f"🔍 Buscando archivos del reporte en: {report_folder}")
+            if os.path.exists(report_folder):
+                try:
+                    logger.info(f"✅ Parseando reporte {report_name}...")
+                    report_obj = clsReport(report_folder, report_id=report_id, workspace_id=workspace_id)
+                    report_obj.save_to_database(conn)
+                    with open(os.path.join(output_dir, f"{workspace_name}__{report_name}__report.pkl"), "wb") as pf:
+                        pickle.dump(report_obj, pf)
+                    logger.info(f"✅ Reporte {report_name} procesado correctamente")
+                except Exception as e:
+                    logger.error(f"❌ Error parseando/serializando report {report_name}: {e}")
+                    print(f"Error parseando/serializando report {report_name}: {e}")
+            else:
+                logger.error(f"❌ Carpeta del reporte no encontrada: {report_folder}")
+                print(f"⚠️ Carpeta del reporte no encontrada: {report_folder}")
 
         # Guardar info actualizada
         os.makedirs(destination_path, exist_ok=True)
@@ -529,7 +557,17 @@ class PowerBIImporter:
 
         # Cerrar conexión DuckDB
         conn.close()
-        print(f"✅ Base de datos DuckDB guardada en: {db_path}")
+        logger.info(f"✅ Base de datos DuckDB guardada en: {db_path}")
+        logger.info(f"✅ Información del workspace guardada en: {info_path}")
+        logger.info(f"✅ Importación del workspace '{workspace_name}' completada exitosamente")
+        print(f"\n{'='*60}")
+        print(f"✅ IMPORTACIÓN COMPLETADA")
+        print(f"{'='*60}")
+        print(f"📁 Archivos descargados en: {destination_path}")
+        print(f"💾 Base de datos: {os.path.abspath(db_path)}")
+        print(f"📊 Modelos semánticos: {len(ws_entry['semantic_models'])}")
+        print(f"📋 Reportes: {len(ws_entry['reports'])}")
+        print(f"{'='*60}\n")
 
 
 

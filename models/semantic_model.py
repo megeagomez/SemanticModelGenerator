@@ -902,13 +902,7 @@ class SemanticModel:
         connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_semantic_model_column_id START 1")
         connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_semantic_model_measure_id START 1")
         
-        # Dropear tablas antiguas si existen (en orden de dependencias, desde dependientes a padre)
-        connection.execute("DROP TABLE IF EXISTS semantic_model_column")
-        connection.execute("DROP TABLE IF EXISTS semantic_model_measure")
-        connection.execute("DROP TABLE IF EXISTS semantic_model_table")
-        connection.execute("DROP TABLE IF EXISTS semantic_model")
-        
-        # Crear tabla semantic_model
+        # Crear tabla semantic_model (sin dropear, para acumular múltiples modelos)
         connection.execute("""
             CREATE TABLE IF NOT EXISTS semantic_model (
                 id INTEGER PRIMARY KEY DEFAULT nextval('seq_semantic_model_id'),
@@ -949,8 +943,17 @@ class SemanticModel:
         ])
         
         # Obtener ID del modelo insertado
-        result = connection.execute("SELECT id FROM semantic_model WHERE name = ?", [model_name]).fetchall()
-        semantic_model_id = result[0][0] if result else 1
+        result = connection.execute("SELECT id FROM semantic_model WHERE semantic_model_id = ?", [self.semantic_model_id]).fetchall()
+        semantic_model_id = result[0][0] if result else None
+        
+        if not semantic_model_id:
+            print(f"⚠️ No se pudo obtener el ID del modelo {model_name}")
+            return
+        
+        # Limpiar datos antiguos de este modelo (sin dropear las tablas completas)
+        connection.execute("DELETE FROM semantic_model_measure WHERE semantic_model_id = ?", [semantic_model_id])
+        connection.execute("DELETE FROM semantic_model_column WHERE semantic_model_id = ?", [semantic_model_id])
+        connection.execute("DELETE FROM semantic_model_table WHERE semantic_model_id = ?", [semantic_model_id])
         
         # Crear tabla semantic_model_table
         connection.execute("""

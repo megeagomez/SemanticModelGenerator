@@ -7,12 +7,72 @@
         {
           "id": "a0bdee75-7946-4105-8078-7954b24663d1",
           "name": "ad"
+        },
+        {
+          "id": "e5d61cb3-a1e7-4c84-adbc-8cb191741d06",
+          "name": "reportADN2"
+        },
+        {
+          "id": "d0dc5c93-2d38-49dd-8fa2-260189632e95",
+          "name": "reportADN1"
         }
       ],
       "semantic_models": [
         {
           "id": "d0fe5836-1a09-4c35-8406-1c31c264beb9",
           "name": "ad"
+        }
+      ]
+    },
+    {
+      "id": "7f550c02-98b9-4d03-a61f-9b62cc4d9d62",
+      "name": "DemoAranzadi",
+      "reports": [
+        {
+          "id": "cb9aa264-0003-43b2-bec1-e28ee1a3dcfe",
+          "name": "demoaranzadi"
+        },
+        {
+          "id": "373c3192-59f6-4e6a-83dc-55436b90643a",
+          "name": "informelunes"
+        }
+      ],
+      "semantic_models": [
+        {
+          "id": "e39f395b-ab74-441f-ae35-90b3eaf8c34e",
+          "name": "demoaranzadi"
+        },
+        {
+          "id": "57fe8a48-b456-4d45-b6ff-96ba5856e3cc",
+          "name": "informelunes"
+        }
+      ]
+    },
+    {
+      "id": "33aa5331-99db-436d-97f1-c1f709b1caf8",
+      "name": "DemoADN",
+      "reports": [
+        {
+          "id": "6e1a400f-4c6c-454f-8c73-b96ea0af208f",
+          "name": "adw"
+        },
+        {
+          "id": "0d888605-53a7-401d-b713-7cc317219323",
+          "name": "semanticAdventureworks"
+        }
+      ],
+      "semantic_models": [
+        {
+          "id": "5fe89c20-7424-4a04-9327-5f3aedd545b6",
+          "name": "adw"
+        },
+        {
+          "id": "478c9502-fae8-4836-abb7-9179f9aab23f",
+          "name": "quedemomaschula"
+        },
+        {
+          "id": "aeb90a37-1f67-4948-be93-fdfa8350fdc9",
+          "name": "semanticAdventureworks"
         }
       ]
     }

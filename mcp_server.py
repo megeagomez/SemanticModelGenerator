@@ -138,41 +138,58 @@ class PowerBIModelServer:
         except Exception as e:
             return [TextContent(type="text", text=f"Error listando modelos: {e}")]
 
-    async def _powerbi_download_report(self, workspace_id: str, report_id: str, output_folder: str = "data") -> list[TextContent]:
-        """Descarga un reporte de Power BI."""
+    async def _powerbi_download_workspace(self, workspace_name: str, destination_path: str = "data", db_name: str = "powerbi") -> list[TextContent]:
+        """Descarga un workspace completo de Power BI (modelos semánticos y reportes)."""
+        import os
+        import traceback
+        import logging
+        
+        logger = logging.getLogger(__name__)
+        
         try:
-            from Importer.src.import_from_powerbi import powerbi_download_report
+            logger.info(f"\n{'='*60}")
+            logger.info(f"🚀 Iniciando descarga de workspace: {workspace_name}")
+            logger.info(f"📁 Directorio actual: {os.getcwd()}")
+            logger.info(f"📁 Destino: {os.path.abspath(destination_path)}")
+            logger.info(f"💾 BD: {db_name}")
+            logger.info(f"{'='*60}")
+            
+            from Importer.src.import_from_powerbi import PowerBIImporter, _active_auth_flow
         except Exception as e:
-            return [TextContent(type="text", text=f"Error importando módulo: {e}")]
+            error_msg = f"Error importando módulo: {e}\n{traceback.format_exc()}"
+            logger.error(error_msg)
+            return [TextContent(type="text", text=f"❌ {error_msg}")]
 
         try:
-            result = powerbi_download_report(workspace_id, report_id, output_folder)
+            # Obtener el downloader del flujo activo
+            if not _active_auth_flow.get("downloader"):
+                error_msg = "❌ No hay autenticación activa. Ejecuta 'powerbi_login_interactive' primero."
+                logger.error(error_msg)
+                return [TextContent(type="text", text=error_msg)]
             
-            if result["success"]:
-                return [TextContent(type="text", text=result["message"])]
-            else:
-                return [TextContent(type="text", text=result["message"])]
+            downloader = _active_auth_flow["downloader"]
+            logger.info(f"✅ Downloader obtenido")
+            logger.info(f"🔐 Token disponible: {bool(downloader.access_token)}")
+            
+            # Crear importer
+            logger.info(f"📦 Creando PowerBIImporter para workspace: {workspace_name}")
+            importer = PowerBIImporter(downloader, workspace_name=workspace_name)
+            
+            # Ejecutar importación
+            logger.info(f"⏳ Ejecutando import_from_powerbi...")
+            result = importer.import_from_powerbi(
+                destination_path=destination_path,
+                WorkspaceName=workspace_name,
+                db_name=db_name
+            )
+            
+            logger.info(f"✅ Importación completada")
+            return [TextContent(type="text", text=f"✅ Workspace '{workspace_name}' descargado e importado exitosamente\n\n📁 Archivos descargados en: {os.path.abspath(destination_path)}\n💾 BD metainformación: {db_name}.duckdb\n\n⚠️ Revisa los logs para detalles de la importación")]
             
         except Exception as e:
-            return [TextContent(type="text", text=f"Error descargando reporte: {e}")]
-
-    async def _powerbi_download_semantic_model(self, workspace_id: str, semantic_model_id: str, output_folder: str = "data") -> list[TextContent]:
-        """Descarga un modelo semántico de Power BI."""
-        try:
-            from Importer.src.import_from_powerbi import powerbi_download_semantic_model
-        except Exception as e:
-            return [TextContent(type="text", text=f"Error importando módulo: {e}")]
-
-        try:
-            result = powerbi_download_semantic_model(workspace_id, semantic_model_id, output_folder)
-            
-            if result["success"]:
-                return [TextContent(type="text", text=result["message"])]
-            else:
-                return [TextContent(type="text", text=result["message"])]
-            
-        except Exception as e:
-            return [TextContent(type="text", text=f"Error descargando modelo: {e}")]
+            error_msg = f"❌ Error descargando workspace: {e}\n\n{traceback.format_exc()}"
+            logger.error(error_msg)
+            return [TextContent(type="text", text=f"{error_msg}\n\n💡 Verifica que:\n- El nombre del workspace sea correcto\n- Tengas permisos para acceder al workspace\n- La autenticación sea válida")]
 
     def __init__(self, models_path: Path):
         self.models_path = models_path
@@ -252,49 +269,27 @@ class PowerBIModelServer:
                     }
                 ),
                 Tool(
-                    name="powerbi_download_report",
-                    description="Descarga un reporte específico de Power BI al directorio local.",
+                    name="powerbi_download_workspace",
+                    description="Descarga un workspace completo de Power BI (todos los modelos semánticos y reportes). Requiere especificar la ruta de destino y el nombre de la base de datos para guardar metainformación.",
                     inputSchema={
                         "type": "object",
                         "properties": {
-                            "workspace_id": {
+                            "workspace_name": {
                                 "type": "string",
-                                "description": "ID del workspace de Power BI"
+                                "description": "Nombre del workspace a descargar"
                             },
-                            "report_id": {
+                            "destination_path": {
                                 "type": "string",
-                                "description": "ID del reporte a descargar"
-                            },
-                            "output_folder": {
-                                "type": "string",
-                                "description": "Carpeta de destino (opcional, default: 'data')",
+                                "description": "Ruta donde guardar los archivos descargados (default: 'data')",
                                 "default": "data"
+                            },
+                            "db_name": {
+                                "type": "string",
+                                "description": "Nombre de la base de datos DuckDB para guardar metainformación (default: 'powerbi')",
+                                "default": "powerbi"
                             }
                         },
-                        "required": ["workspace_id", "report_id"]
-                    }
-                ),
-                Tool(
-                    name="powerbi_download_semantic_model",
-                    description="Descarga un modelo semántico específico de Power BI al directorio local.",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "workspace_id": {
-                                "type": "string",
-                                "description": "ID del workspace de Power BI"
-                            },
-                            "semantic_model_id": {
-                                "type": "string",
-                                "description": "ID del modelo semántico a descargar"
-                            },
-                            "output_folder": {
-                                "type": "string",
-                                "description": "Carpeta de destino (opcional, default: 'data')",
-                                "default": "data"
-                            }
-                        },
-                        "required": ["workspace_id", "semantic_model_id"]
+                        "required": ["workspace_name"]
                     }
                 ),
                 Tool(
@@ -523,18 +518,11 @@ class PowerBIModelServer:
             if name == "powerbi_list_semantic_models":
                 return await self._powerbi_list_semantic_models(arguments["workspace_id"])
             
-            if name == "powerbi_download_report":
-                return await self._powerbi_download_report(
-                    arguments["workspace_id"],
-                    arguments["report_id"],
-                    arguments.get("output_folder", "data")
-                )
-            
-            if name == "powerbi_download_semantic_model":
-                return await self._powerbi_download_semantic_model(
-                    arguments["workspace_id"],
-                    arguments["semantic_model_id"],
-                    arguments.get("output_folder", "data")
+            if name == "powerbi_download_workspace":
+                return await self._powerbi_download_workspace(
+                    arguments["workspace_name"],
+                    arguments.get("destination_path", "data"),
+                    arguments.get("db_name", "powerbi")
                 )
             
             elif name == "get_model_info":

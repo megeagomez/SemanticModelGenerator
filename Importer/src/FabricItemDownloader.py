@@ -363,13 +363,10 @@ class FabricItemDownloader:
         
         if response.status_code == 200:
             # Guardar directamente el archivo
-            if workspace_name:
-                safe_workspace_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in workspace_name.strip())
-            else:
-                safe_workspace_name = workspace_id
-            
+            safe_workspace_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in (workspace_name or workspace_id).strip())
             safe_report_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in report_name.strip())
-            target_folder = os.path.join(output_folder, safe_workspace_name, safe_report_name)
+            # Formato: {output_folder}/{workspace_name}/{proyecto}.Report/
+            target_folder = os.path.join(output_folder, safe_workspace_name, f"{safe_report_name}.Report")
             os.makedirs(target_folder, exist_ok=True)
             
             # Guardar el archivo PBIX
@@ -400,7 +397,7 @@ class FabricItemDownloader:
             workspace_id: ID del workspace de Fabric
             report_id: ID del reporte a descargar
             output_folder: Carpeta base para guardar los archivos (default: "data")
-                          Los archivos se guardarán en: {output_folder}/{workspace_name}/{report_name}/
+                          Los archivos se guardarán en: {output_folder}/{workspace_name}/{report_name}.Report/
             
         Returns:
             True si la descarga fue exitosa, False en caso contrario
@@ -437,10 +434,10 @@ class FabricItemDownloader:
         
         report_name = current_report.get('displayName', report_id)
         
-        # Crear la estructura de carpetas: data/{workspace_name}/{report_name}/
+        # Crear la estructura de carpetas: data/{workspace_name}/{proyecto}.Report/
         safe_workspace_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in workspace_name.strip())
         safe_report_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in report_name.strip())
-        target_folder = os.path.join(output_folder, safe_workspace_name, safe_report_name)
+        target_folder = os.path.join(output_folder, safe_workspace_name, f"{safe_report_name}.Report")
         
         # Crear la carpeta de destino
         os.makedirs(target_folder, exist_ok=True)
@@ -576,7 +573,7 @@ class FabricItemDownloader:
             workspace_id: ID del workspace de Fabric
             semantic_model_id: ID del modelo semántico a descargar
             output_folder: Carpeta base para guardar los archivos (default: "data")
-                          Los archivos se guardarán en: {output_folder}/{workspace_name}/{model_name}/
+                          Los archivos se guardarán en: {output_folder}/{workspace_name}/{model_name}.SemanticModel/
             
         Returns:
             True si la descarga fue exitosa, False en caso contrario
@@ -613,10 +610,10 @@ class FabricItemDownloader:
         
         model_name = current_model.get('displayName', semantic_model_id)
         
-        # Crear la estructura de carpetas: data/{workspace_name}/{model_name}/
+        # Crear la estructura de carpetas: data/{workspace_name}/{proyecto}.SemanticModel/
         safe_workspace_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in workspace_name.strip())
         safe_model_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in model_name.strip())
-        target_folder = os.path.join(output_folder, safe_workspace_name, safe_model_name)
+        target_folder = os.path.join(output_folder, safe_workspace_name, f"{safe_model_name}.SemanticModel")
         
         # Crear la carpeta de destino
         os.makedirs(target_folder, exist_ok=True)
