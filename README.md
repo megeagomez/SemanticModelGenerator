@@ -1,5 +1,23 @@
 # Power BI Semantic Model Management Library
 
+---
+
+## 🦆 Integración con DuckDB (rama mcpconduckdb)
+
+En esta rama, la base de datos DuckDB se utiliza como **fuente central de información** para el análisis y gestión de dependencias en modelos y reportes de Power BI. Casi todas las operaciones del MCP se basan en los datos almacenados en DuckDB, lo que permite:
+
+- Parsear y guardar información de **visuales** de reportes (tipo, campos usados, posición, etc.)
+- Almacenar detalles de **modelos semánticos**, incluyendo tablas, columnas, relaciones y medidas
+- Registrar el uso de columnas y medidas en cada visual y reporte
+- Consultar rápidamente dependencias entre reportes, tablas y columnas
+- Optimizar la detección de elementos no utilizados y la generación de submodelos
+
+**La idea principal:**
+
+> Toda la lógica de análisis de dependencias y optimización de modelos/reportes se apoya en la información estructurada y consultable de DuckDB, en vez de recorrer archivos y carpetas cada vez.
+
+Esto permite mayor velocidad, consultas complejas y una base sólida para futuras automatizaciones.
+
 **Español | [English](README_EN.md)**
 
 ---
