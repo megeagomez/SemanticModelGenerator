@@ -637,14 +637,36 @@ class PowerBIModelServer:
             else:
                 raise ValueError(f"Unknown tool: {name}")
     
+    def _get_workspace_path(self) -> Path:
+        """Obtiene la ruta del directorio de workspace basado en default_db_name.
+        
+        Retorna: Path("data") / self.default_db_name
+        Ej: Path("data/demostracion") para default_db_name = "demostracion"
+        """
+        return Path("data") / self.default_db_name
+    
     async def _list_semantic_models(self) -> list[TextContent]:
-        """Lista todos los modelos semánticos"""
-        models = [d.name for d in self.models_path.iterdir() 
+        """Lista todos los modelos semánticos del workspace actual"""
+        workspace_path = self._get_workspace_path()
+        
+        # Si el directorio no existe, retornar lista vacía con mensaje
+        if not workspace_path.exists():
+            return [TextContent(
+                type="text", 
+                text=f"📁 El directorio del workspace no existe aún: {workspace_path}\n\n"
+                     f"Descarga un workspace primero con 'download_workspace' para crear esta estructura."
+            )]
+        
+        # Escanear modelos semánticos en el directorio del workspace
+        models = [d.name for d in workspace_path.iterdir() 
                  if d.is_dir() and d.name.endswith('.SemanticModel')]
         
-        result = f"Modelos semánticos encontrados ({len(models)}):\n\n"
+        result = f"Modelos semánticos encontrados ({len(models)}) en workspace '{self.default_db_name}':\n\n"
         for model in sorted(models):
             result += f"- {model}\n"
+        
+        if not models:
+            result += "(Ninguno. Descarga un workspace para importar modelos.)"
         
         return [TextContent(type="text", text=result)]
 
@@ -661,11 +683,12 @@ class PowerBIModelServer:
         return [TextContent(type="text", text=f"✅ Directorio de modelos actualizado a: {self.models_path}")]
     
     async def _get_model_info(self, model_name: str) -> list[TextContent]:
-        """Obtiene información de un modelo"""
-        model_path = self.models_path / model_name
+        """Obtiene información de un modelo del workspace actual"""
+        workspace_path = self._get_workspace_path()
+        model_path = workspace_path / model_name
         
         if not model_path.exists():
-            return [TextContent(type="text", text=f"Error: Modelo '{model_name}' no encontrado")]
+            return [TextContent(type="text", text=f"Error: Modelo '{model_name}' no encontrado en {workspace_path}")]
         
         # Cargar modelo
         model = SemanticModel(str(model_path))
@@ -694,22 +717,39 @@ class PowerBIModelServer:
         return [TextContent(type="text", text=result)]
     
     async def _list_reports(self) -> list[TextContent]:
-        """Lista todos los reportes"""
-        reports = [d.name for d in self.models_path.iterdir() 
+        """Lista todos los reportes del workspace actual"""
+        workspace_path = self._get_workspace_path()
+        
+        # Si el directorio no existe, retornar lista vacía con mensaje
+        if not workspace_path.exists():
+            return [TextContent(
+                type="text", 
+                text=f"📁 El directorio del workspace no existe aún: {workspace_path}\n\n"
+                     f"Descarga un workspace primero con 'download_workspace' para crear esta estructura."
+            )]
+        
+        # Escanear reportes en el directorio del workspace
+        reports = [d.name for d in workspace_path.iterdir() 
                   if d.is_dir() and d.name.endswith('.Report')]
         
-        result = f"Reportes encontrados ({len(reports)}):\n\n"
+        result = f"Reportes encontrados ({len(reports)}) en workspace '{self.default_db_name}':\n\n"
         for report in sorted(reports):
             result += f"- {report}\n"
+        
+        if not reports:
+            result += "(Ninguno. Descarga un workspace para importar reportes.)"
+        
+        return [TextContent(type="text", text=result)]
         
         return [TextContent(type="text", text=result)]
     
     async def _analyze_report(self, report_name: str) -> list[TextContent]:
-        """Analiza un reporte"""
-        report_path = self.models_path / report_name
+        """Analiza un reporte del workspace actual"""
+        workspace_path = self._get_workspace_path()
+        report_path = workspace_path / report_name
         
         if not report_path.exists():
-            return [TextContent(type="text", text=f"Error: Reporte '{report_name}' no encontrado")]
+            return [TextContent(type="text", text=f"Error: Reporte '{report_name}' no encontrado en {workspace_path}")]
         
         # Parsear reporte
         report = clsReport(str(report_path))

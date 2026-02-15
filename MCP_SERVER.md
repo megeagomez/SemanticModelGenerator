@@ -42,6 +42,80 @@ Añade:
 
 > **Nota sobre DuckDB**: Algunas herramientas utilizan una base de datos DuckDB para análisis rápido de dependencias entre modelos, reportes y elementos. Esto permite consultas más eficientes que el análisis de archivos directo.
 
+## Arquitectura Workspace: Offline-First
+
+El servidor utiliza una arquitectura **workspace-scoped** que separa las operaciones remotas (dependientes de API) de las locales (offline):
+
+### Estructura de Directorios
+
+```
+MCP_ROOT/
+  ├── data/
+  │   ├── demostracion/              ← Workspace descargado
+  │   │   ├── FullAdventureWorks.SemanticModel/
+  │   │   │   ├── definition/...
+  │   │   │   └── model.bim
+  │   │   ├── FullAdventureWorks.Report/
+  │   │   │   ├── definition.pbir
+  │   │   │   └── definition/...
+  │   │   ├── demostracion.duckdb    ← Metadatos del workspace
+  │   │
+  │   └── other_workspace/           ← Otro workspace
+  │       ├── SomeModel.SemanticModel/
+  │       └── other_workspace.duckdb
+  │
+  └── Modelos/                       ← Directorio legacy (para compatibilidad)
+      ├── FullAdventureWorks.pbip
+      └── ...
+```
+
+### Operaciones por Fase
+
+**Fase 1: Autenticación Remota** (requiere login Power BI)
+- `powerbi_login_interactive` - Autentica con Power BI
+- `powerbi_check_auth_status` - Verifica estado de login
+- `powerbi_list_workspaces` - Lista workspaces
+- `powerbi_list_reports` - Lista reportes del workspace remoto
+- `powerbi_list_semantic_models` - Lista modelos remotos
+- `powerbi_download_workspace` - Descarga workspace a `data/<workspace_name>/`
+
+**Fase 2: Análisis Offline** (NO requiere login)
+- `default_db` - Selecciona workspace actual
+- `list_semantic_models` - Lee desde `data/<workspace_name>/*.SemanticModel`
+- `list_reports` - Lee desde `data/<workspace_name>/*.Report`
+- `get_model_info` - Analiza modelo del workspace actual
+- `analyze_report` - Analiza reporte del workspace actual
+- `create_subset_model` - Crea submodelos desde datos locales
+- `create_model_from_reports` - Optimiza modelo basándose en reportes locales
+
+**Fase 3: Configuración** (administración)
+- `set_models_path` - Configurar ruta legacy (Modelos/)
+- `analyze_model_usage_bd` - Consulta dependencias desde DuckDB
+
+### Workflow Offline-First
+
+1. **Primera vez**: Autentica y descarga workspace
+   ```
+   Usuario: "Descarga el workspace demostracion"
+   → powerbi_download_workspace(...) 
+   → Crea data/demostracion/ con modelos, reportes y demostracion.duckdb
+   ```
+
+2. **Trabajo offline**: Usa herramientas locales sin login
+   ```
+   Usuario: "¿Qué modelos tengo?"
+   → list_semantic_models (usa data/demostracion/)
+   → NO requiere autenticación
+   ```
+
+3. **Cambiar workspace**: Selecciona otro workspace descargado
+   ```
+   Usuario: "Usa el workspace other_workspace"
+   → default_db(db_path="data/other_workspace/other_workspace.duckdb", 
+                 db_name="other_workspace")
+   → Siguiente list_* leerá desde data/other_workspace/
+   ```
+
 ### 1. Autenticación y Descarga desde Power BI
 
 | Herramienta | Descripción | Parámetros | 🗄️ DuckDB |
@@ -57,8 +131,9 @@ Añade:
 
 | Herramienta | Descripción | Parámetros | 🗄️ DuckDB |
 |------------|-------------|------------|:----------:|
-| `set_models_path` | Cambia directorio base de modelos/reportes | `path` | ❌ |
-| `list_semantic_models` | Lista todos los modelos .SemanticModel | - | ❌ |
+| `default_db` | Selecciona workspace actual (por defecto: demostracion) | `db_path`, `db_name` | ⚙️ |
+| `set_models_path` | Cambia directorio base legacy (Modelos/) | `path` | ❌ |
+| `list_semantic_models` | Lista modelos de workspace actual (data/<workspace_name>/) | - | ❌ |
 | `get_model_info` | Obtiene estructura del modelo | `model_name` | ❌ |
 | `get_table_details` | Detalles de una tabla (columnas, medidas, particiones) | `model_name`, `table_name` | ❌ |
 | `create_subset_model` | Crea submodelo con tablas específicas | `source_model`, `target_model`, `tables`, `search_direction`, `recursive`, `max_depth` | ❌ |
@@ -68,7 +143,7 @@ Añade:
 
 | Herramienta | Descripción | Parámetros | 🗄️ DuckDB |
 |------------|-------------|------------|:----------:|
-| `list_reports` | Lista todos los reportes .Report | - | ❌ |
+| `list_reports` | Lista reportes de workspace actual (data/<workspace_name>/) | - | ❌ |
 | `analyze_report` | Extrae tablas/columnas del reporte | `report_name` | ❌ |
 | `get_report_pages` | Lista páginas con nombre y # visuales | `report_name` | ❌ |
 | `get_page_visuals` | Visuales de una página (tipo, posición, campos) | `report_name`, `page_name` | ❌ |
@@ -79,13 +154,13 @@ Añade:
 | Herramienta | Descripción | Parámetros | 🗄️ DuckDB |
 |------------|-------------|------------|:----------:|
 | `analyze_model_usage` | Qué tablas se usan en reportes (filesystem) | `model_name` | ❌ |
-| `analyze_model_usage_bd` | Qué tablas se usan (desde DuckDB) | `model_name`, `db_path`, `semantic_model_id` | ✅ |
+| `analyze_model_usage_bd` | Qué tablas se usan (desde DuckDB del workspace) | `model_name`, `db_path`, `semantic_model_id` | ✅ |
 
 ### 5. Configuración
 
 | Herramienta | Descripción | Parámetros | 🗄️ DuckDB |
 |------------|-------------|------------|:----------:|
-| `default_db` | Establece base DuckDB por defecto | `db_path`, `db_name` | ⚙️ |
+| `default_db` | Establece base DuckDB por defecto (workspace actual) | `db_path`, `db_name` | ⚙️ |
 
 ## Ejemplos de Uso en Claude
 
@@ -150,31 +225,11 @@ Claude: [llama a create_subset_model con:
 ]
 ```
 
-### Analizar qué tablas no se usan (desde filesystem)
+### Analizar qué tablas no se usan
 
 ```
 Usuario: "¿Qué tablas del modelo FullAdventureWorks no se usan en ningún reporte?"
 Claude: [llama a analyze_model_usage con model_name="FullAdventureWorks.SemanticModel"]
-```
-
-### Analizar dependencias usando DuckDB
-
-```
-Usuario: "Usa la base de datos para decirme qué tablas del modelo FullAdventureWorks no se usan"
-Claude: [primero llama a default_db con db_path="data/demostracion.duckdb" y db_name="demostracion",
-         luego llama a analyze_model_usage_bd con 
-         model_name="FullAdventureWorks.SemanticModel" y
-         semantic_model_id="<GUID del modelo>"]
-```
-
-### Configurar base de datos por defecto
-
-```
-Usuario: "Configura la base de datos a usar data/powerbi.duckdb"
-Claude: [llama a default_db con 
-  db_path="data/powerbi.duckdb"
-  db_name="powerbi"
-]
 ```
 
 ## Verificación del Servidor
