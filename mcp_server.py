@@ -580,6 +580,20 @@ class PowerBIModelServer:
                         "required": ["db_path", "db_name"]
                     }
                 ),
+                Tool(
+                    name="querydb",
+                    description="Ejecuta una consulta SQL en la base de datos DuckDB predeterminada",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "Consulta SQL a ejecutar en DuckDB"
+                            }
+                        },
+                        "required": ["query"]
+                    }
+                ),
             ]
         
         @self.server.call_tool()
@@ -674,6 +688,9 @@ class PowerBIModelServer:
                     arguments["db_path"],
                     arguments["db_name"]
                 )
+            
+            elif name == "querydb":
+                return await self._query_db(arguments["query"])
             
             else:
                 raise ValueError(f"Unknown tool: {name}")
@@ -1473,6 +1490,65 @@ class PowerBIModelServer:
                 f"- Ruta: {self.default_db_path}"
             )
         )]
+    
+    async def _query_db(self, query: str) -> list[TextContent]:
+        """Ejecuta una consulta SQL en la BD DuckDB predeterminada.
+        
+        Args:
+            query: Consulta SQL a ejecutar
+            
+        Returns:
+            Resultados de la consulta en formato texto
+        """
+        if not self.default_db_path.exists():
+            return [TextContent(
+                type="text",
+                text=f"❌ Base de datos no encontrada: {self.default_db_path}\n\n"
+                     f"Usa 'default_db' para configurar una base de datos válida."
+            )]
+        
+        try:
+            import duckdb
+            connection = duckdb.connect(str(self.default_db_path), read_only=True)
+            
+            # Ejecutar la consulta
+            result = connection.execute(query).fetchall()
+            columns = [desc[0] for desc in connection.description] if connection.description else []
+            
+            connection.close()
+            
+            # Formatear resultados
+            if not result:
+                return [TextContent(
+                    type="text",
+                    text=f"✅ Consulta ejecutada correctamente.\n\n"
+                         f"No se devolvieron resultados."
+                )]
+            
+            # Crear tabla con resultados
+            output = f"✅ Consulta ejecutada correctamente.\n\n"
+            output += f"📊 Resultados ({len(result)} filas):\n\n"
+            
+            # Encabezados
+            if columns:
+                output += "| " + " | ".join(columns) + " |\n"
+                output += "|" + "|".join([" --- " for _ in columns]) + "|\n"
+                
+                # Filas
+                for row in result:
+                    output += "| " + " | ".join(str(val) for val in row) + " |\n"
+            else:
+                # Si no hay columnas conocidas, mostrar como JSON
+                for row in result:
+                    output += str(row) + "\n"
+            
+            return [TextContent(type="text", text=output)]
+            
+        except Exception as e:
+            return [TextContent(
+                type="text",
+                text=f"❌ Error ejecutando consulta:\n\n{str(e)}"
+            )]
     
     async def run(self):
         """Ejecuta el servidor MCP"""
