@@ -1,4 +1,4 @@
-from typing import List, Optional, Set, Tuple, Literal, Dict
+from typing import List, Optional, Set, Tuple, Literal, Dict, Any
 from pathlib import Path
 import json
 import os
@@ -68,7 +68,13 @@ class SemanticModel:
         self.cultures: List[Culture] = []
         self.platform: Optional[Platform] = None
         self.definition: Optional[Definition] = None
-        
+        # Dependencias cargadas desde DuckDB
+        self.report_usage: List[Dict[str, Any]] = []
+        self.column_usage: List[Dict[str, Any]] = []
+        self.measure_usage: List[Dict[str, Any]] = []
+        self.usage_by_report: Dict[str, Dict[str, Any]] = {}
+        self.usage_by_table: Dict[str, Dict[str, Any]] = {}
+        self.usage_by_visual: Dict[str, Dict[str, Any]] = {}
         # Metadatos para reconstrucción
         self._file_metadata = {
             'model': {'original_path': None, 'modified': False},
@@ -883,6 +889,200 @@ class SemanticModel:
         
         return related_tables
 
+   
+        
+    def load_dependencies_from_db(self, connection) -> None:
+        """
+        Carga dependencias de uso desde DuckDB para el modelo semántico.
+
+        Usa report.semantic_model_reference (GUID) para filtrar los reportes
+        y carga el uso de columnas/medidas desde report_column_used y
+        report_measure_used. No modifica tablas ni relaciones del modelo; solo
+        llena estructuras de dependencias en memoria.
+        """
+        # Resetear estructuras
+        self.report_usage = []
+        self.column_usage = []
+        self.measure_usage = []
+        self.usage_by_report = {}
+        self.usage_by_table = {}
+        self.usage_by_visual = {}
+
+        if not self.semantic_model_id:
+            return
+
+        reports = connection.execute(
+            """
+            SELECT id, name, report_id, workspace_id
+            FROM report
+            WHERE semantic_model_reference = ?
+            """,
+            [self.semantic_model_id]
+        ).fetchall()
+
+        if not reports:
+            return
+
+        for report_db_id, report_name, report_guid, workspace_id in reports:
+            if report_name not in self.usage_by_report:
+                self.usage_by_report[report_name] = {
+                    "report_id": report_guid,
+                    "workspace_id": workspace_id,
+                    "total_column_usage": 0,
+                    "total_measure_usage": 0,
+                    "columns_by_table": {},
+                    "measures_by_table": {},
+                    "visuals": {}
+                }
+
+        column_rows = connection.execute(
+            """
+            SELECT r.id, r.name, r.report_id, r.workspace_id,
+                   c.page_name, c.visual_name, c.table_name, c.column_name, c.usage_count
+            FROM report_column_used c
+            JOIN report r ON r.id = c.report_id
+            WHERE r.semantic_model_reference = ?
+            """,
+            [self.semantic_model_id]
+        ).fetchall()
+
+        for (
+            report_db_id,
+            report_name,
+            report_guid,
+            workspace_id,
+            page_name,
+            visual_name,
+            table_name,
+            column_name,
+            usage_count,
+        ) in column_rows:
+            self.column_usage.append({
+                "report_id": report_guid,
+                "report_name": report_name,
+                "workspace_id": workspace_id,
+                "page_name": page_name,
+                "visual_name": visual_name,
+                "table_name": table_name,
+                "column_name": column_name,
+                "usage_count": usage_count,
+            })
+
+            report_entry = self.usage_by_report[report_name]
+            report_entry["total_column_usage"] += int(usage_count or 0)
+            columns_by_table = report_entry["columns_by_table"]
+            if table_name not in columns_by_table:
+                columns_by_table[table_name] = {}
+            columns_by_table[table_name][column_name] = (
+                columns_by_table[table_name].get(column_name, 0) + int(usage_count or 0)
+            )
+
+            if table_name not in self.usage_by_table:
+                self.usage_by_table[table_name] = {
+                    "columns": {},
+                    "measures": {},
+                    "reports": set(),
+                }
+            table_entry = self.usage_by_table[table_name]
+            table_entry["columns"][column_name] = (
+                table_entry["columns"].get(column_name, 0) + int(usage_count or 0)
+            )
+            table_entry["reports"].add(report_name)
+
+            visual_key = f"{report_name}::{page_name}::{visual_name}"
+            if visual_key not in self.usage_by_visual:
+                self.usage_by_visual[visual_key] = {
+                    "report_name": report_name,
+                    "page_name": page_name,
+                    "visual_name": visual_name,
+                    "columns": {},
+                    "measures": {},
+                }
+            visual_entry = self.usage_by_visual[visual_key]
+            visual_entry["columns"][f"{table_name}.{column_name}"] = (
+                visual_entry["columns"].get(f"{table_name}.{column_name}", 0)
+                + int(usage_count or 0)
+            )
+
+        measure_rows = connection.execute(
+            """
+            SELECT r.id, r.name, r.report_id, r.workspace_id,
+                   m.page_name, m.visual_name, m.table_name, m.measure_name, m.usage_count
+            FROM report_measure_used m
+            JOIN report r ON r.id = m.report_id
+            WHERE r.semantic_model_reference = ?
+            """,
+            [self.semantic_model_id]
+        ).fetchall()
+
+        for (
+            report_db_id,
+            report_name,
+            report_guid,
+            workspace_id,
+            page_name,
+            visual_name,
+            table_name,
+            measure_name,
+            usage_count,
+        ) in measure_rows:
+            self.measure_usage.append({
+                "report_id": report_guid,
+                "report_name": report_name,
+                "workspace_id": workspace_id,
+                "page_name": page_name,
+                "visual_name": visual_name,
+                "table_name": table_name,
+                "measure_name": measure_name,
+                "usage_count": usage_count,
+            })
+
+            report_entry = self.usage_by_report[report_name]
+            report_entry["total_measure_usage"] += int(usage_count or 0)
+            measures_by_table = report_entry["measures_by_table"]
+            if table_name not in measures_by_table:
+                measures_by_table[table_name] = {}
+            measures_by_table[table_name][measure_name] = (
+                measures_by_table[table_name].get(measure_name, 0) + int(usage_count or 0)
+            )
+
+            if table_name not in self.usage_by_table:
+                self.usage_by_table[table_name] = {
+                    "columns": {},
+                    "measures": {},
+                    "reports": set(),
+                }
+            table_entry = self.usage_by_table[table_name]
+            table_entry["measures"][measure_name] = (
+                table_entry["measures"].get(measure_name, 0) + int(usage_count or 0)
+            )
+            table_entry["reports"].add(report_name)
+
+            visual_key = f"{report_name}::{page_name}::{visual_name}"
+            if visual_key not in self.usage_by_visual:
+                self.usage_by_visual[visual_key] = {
+                    "report_name": report_name,
+                    "page_name": page_name,
+                    "visual_name": visual_name,
+                    "columns": {},
+                    "measures": {},
+                }
+            visual_entry = self.usage_by_visual[visual_key]
+            visual_entry["measures"][f"{table_name}.{measure_name}"] = (
+                visual_entry["measures"].get(f"{table_name}.{measure_name}", 0)
+                + int(usage_count or 0)
+            )
+
+        for report_name, report_data in self.usage_by_report.items():
+            self.report_usage.append({
+                "report_name": report_name,
+                "report_id": report_data["report_id"],
+                "workspace_id": report_data["workspace_id"],
+                "total_column_usage": report_data["total_column_usage"],
+                "total_measure_usage": report_data["total_measure_usage"],
+            })
+   
+   
     def save_to_database(self, connection):
         """
         Guarda el modelo semántico completo en DuckDB.
@@ -950,12 +1150,7 @@ class SemanticModel:
             print(f"⚠️ No se pudo obtener el ID del modelo {model_name}")
             return
         
-        # Limpiar datos antiguos de este modelo (sin dropear las tablas completas)
-        connection.execute("DELETE FROM semantic_model_measure WHERE semantic_model_id = ?", [semantic_model_id])
-        connection.execute("DELETE FROM semantic_model_column WHERE semantic_model_id = ?", [semantic_model_id])
-        connection.execute("DELETE FROM semantic_model_table WHERE semantic_model_id = ?", [semantic_model_id])
-        
-        # Crear tabla semantic_model_table
+        # Crear tabla semantic_model_table PRIMERO
         connection.execute("""
             CREATE TABLE IF NOT EXISTS semantic_model_table (
                 id INTEGER PRIMARY KEY DEFAULT nextval('seq_semantic_model_table_id'),
@@ -998,6 +1193,11 @@ class SemanticModel:
                 FOREIGN KEY(semantic_model_id) REFERENCES semantic_model(id)
             )
         """)
+        
+        # AHORA SÍ: Limpiar datos antiguos de este modelo (después de crear las tablas)
+        connection.execute("DELETE FROM semantic_model_measure WHERE semantic_model_id = ?", [semantic_model_id])
+        connection.execute("DELETE FROM semantic_model_column WHERE semantic_model_id = ?", [semantic_model_id])
+        connection.execute("DELETE FROM semantic_model_table WHERE semantic_model_id = ?", [semantic_model_id])
         
         # Insertar tablas, columnas y medidas
         for table in self.tables:

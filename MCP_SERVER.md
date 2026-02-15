@@ -40,31 +40,52 @@ Añade:
 
 ## Herramientas Disponibles
 
-### 1. Información y Listado
+> **Nota sobre DuckDB**: Algunas herramientas utilizan una base de datos DuckDB para análisis rápido de dependencias entre modelos, reportes y elementos. Esto permite consultas más eficientes que el análisis de archivos directo.
 
-| Herramienta | Descripción | Parámetros |
-|------------|-------------|------------|
-| `list_semantic_models` | Lista todos los modelos .SemanticModel | - |
-| `get_model_info` | Obtiene estructura del modelo | `model_name` |
-| `list_reports` | Lista todos los reportes .Report | - |
-| `get_table_details` | Detalles de una tabla | `model_name`, `table_name` |
+### 1. Autenticación y Descarga desde Power BI
 
-### 2. Análisis de Reportes
+| Herramienta | Descripción | Parámetros | 🗄️ DuckDB |
+|------------|-------------|------------|:----------:|
+| `powerbi_login_interactive` | Inicia login interactivo (device code flow) | - | ❌ |
+| `powerbi_check_auth_status` | Verifica estado de autenticación | - | ❌ |
+| `powerbi_list_workspaces` | Lista workspaces disponibles | - | ❌ |
+| `powerbi_list_reports` | Lista reportes de un workspace | `workspace_id` | ❌ |
+| `powerbi_list_semantic_models` | Lista modelos semánticos de un workspace | `workspace_id` | ❌ |
+| `powerbi_download_workspace` | Descarga workspace completo | `workspace_name`, `destination_path`, `db_name` | ✅ |
 
-| Herramienta | Descripción | Parámetros |
-|------------|-------------|------------|
-| `analyze_report` | Extrae tablas/columnas del reporte | `report_name` |
-| `get_report_pages` | Lista páginas con nombre y # visuales | `report_name` |
-| `get_page_visuals` | Visuales de una página (tipo, posición, campos) | `report_name`, `page_name` |
-| `generate_report_svg` | Genera SVG de página de reporte | `report_name`, `page_name` (opcional), `save_to_file` (opcional) |
-| `analyze_model_usage` | Qué tablas se usan en reportes | `model_name` |
+### 2. Gestión de Modelos Semánticos
 
-### 3. Creación de Modelos
+| Herramienta | Descripción | Parámetros | 🗄️ DuckDB |
+|------------|-------------|------------|:----------:|
+| `set_models_path` | Cambia directorio base de modelos/reportes | `path` | ❌ |
+| `list_semantic_models` | Lista todos los modelos .SemanticModel | - | ❌ |
+| `get_model_info` | Obtiene estructura del modelo | `model_name` | ❌ |
+| `get_table_details` | Detalles de una tabla (columnas, medidas, particiones) | `model_name`, `table_name` | ❌ |
+| `create_subset_model` | Crea submodelo con tablas específicas | `source_model`, `target_model`, `tables`, `search_direction`, `recursive`, `max_depth` | ❌ |
+| `create_model_from_reports` | Modelo optimizado desde reportes | `source_model`, `target_model`, `reports`, `include_related` | ❌ |
 
-| Herramienta | Descripción | Parámetros |
-|------------|-------------|------------|
-| `create_subset_model` | Crea submodelo con tablas específicas | `source_model`, `target_model`, `tables`, `search_direction`, `recursive`, `max_depth` |
-| `create_model_from_reports` | Modelo optimizado desde reportes | `source_model`, `target_model`, `reports`, `include_related` |
+### 3. Análisis de Reportes
+
+| Herramienta | Descripción | Parámetros | 🗄️ DuckDB |
+|------------|-------------|------------|:----------:|
+| `list_reports` | Lista todos los reportes .Report | - | ❌ |
+| `analyze_report` | Extrae tablas/columnas del reporte | `report_name` | ❌ |
+| `get_report_pages` | Lista páginas con nombre y # visuales | `report_name` | ❌ |
+| `get_page_visuals` | Visuales de una página (tipo, posición, campos) | `report_name`, `page_name` | ❌ |
+| `generate_report_svg` | Genera SVG de página de reporte | `report_name`, `page_name` (opcional), `save_to_file` (opcional) | ❌ |
+
+### 4. Análisis de Dependencias
+
+| Herramienta | Descripción | Parámetros | 🗄️ DuckDB |
+|------------|-------------|------------|:----------:|
+| `analyze_model_usage` | Qué tablas se usan en reportes (filesystem) | `model_name` | ❌ |
+| `analyze_model_usage_bd` | Qué tablas se usan (desde DuckDB) | `model_name`, `db_path`, `semantic_model_id` | ✅ |
+
+### 5. Configuración
+
+| Herramienta | Descripción | Parámetros | 🗄️ DuckDB |
+|------------|-------------|------------|:----------:|
+| `default_db` | Establece base DuckDB por defecto | `db_path`, `db_name` | ⚙️ |
 
 ## Ejemplos de Uso en Claude
 
@@ -129,11 +150,31 @@ Claude: [llama a create_subset_model con:
 ]
 ```
 
-### Analizar qué tablas no se usan
+### Analizar qué tablas no se usan (desde filesystem)
 
 ```
 Usuario: "¿Qué tablas del modelo FullAdventureWorks no se usan en ningún reporte?"
 Claude: [llama a analyze_model_usage con model_name="FullAdventureWorks.SemanticModel"]
+```
+
+### Analizar dependencias usando DuckDB
+
+```
+Usuario: "Usa la base de datos para decirme qué tablas del modelo FullAdventureWorks no se usan"
+Claude: [primero llama a default_db con db_path="data/demostracion.duckdb" y db_name="demostracion",
+         luego llama a analyze_model_usage_bd con 
+         model_name="FullAdventureWorks.SemanticModel" y
+         semantic_model_id="<GUID del modelo>"]
+```
+
+### Configurar base de datos por defecto
+
+```
+Usuario: "Configura la base de datos a usar data/powerbi.duckdb"
+Claude: [llama a default_db con 
+  db_path="data/powerbi.duckdb"
+  db_name="powerbi"
+]
 ```
 
 ## Verificación del Servidor

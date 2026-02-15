@@ -194,6 +194,8 @@ class PowerBIModelServer:
     def __init__(self, models_path: Path):
         self.models_path = models_path
         self.server = Server("powerbi-semantic-model")
+        self.default_db_name = "demostracion"
+        self.default_db_path = Path("data") / "demostracion.duckdb"
         self._register_handlers()
     
     def _register_handlers(self):
@@ -491,6 +493,46 @@ class PowerBIModelServer:
                         "required": ["model_name"]
                     }
                 ),
+                Tool(
+                    name="analyze_model_usage_bd",
+                    description="Analiza uso del modelo usando DuckDB (report, report_column_used, report_measure_used)",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "model_name": {
+                                "type": "string",
+                                "description": "Nombre del modelo a analizar"
+                            },
+                            "db_path": {
+                                "type": "string",
+                                "description": "Ruta a la base DuckDB (default: la configurada con default_db)"
+                            },
+                            "semantic_model_id": {
+                                "type": "string",
+                                "description": "GUID del modelo semántico (si no está en el objeto)"
+                            }
+                        },
+                        "required": ["model_name"]
+                    }
+                ),
+                Tool(
+                    name="default_db",
+                    description="Establece la base de datos DuckDB por defecto (ruta y nombre)",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "db_path": {
+                                "type": "string",
+                                "description": "Ruta a la base DuckDB"
+                            },
+                            "db_name": {
+                                "type": "string",
+                                "description": "Nombre lógico de la base de datos"
+                            }
+                        },
+                        "required": ["db_path", "db_name"]
+                    }
+                ),
             ]
         
         @self.server.call_tool()
@@ -578,6 +620,19 @@ class PowerBIModelServer:
             
             elif name == "analyze_model_usage":
                 return await self._analyze_model_usage(arguments["model_name"])
+
+            elif name == "analyze_model_usage_bd":
+                return await self._analyze_model_usage_bd(
+                    arguments["model_name"],
+                    arguments.get("db_path"),
+                    arguments.get("semantic_model_id")
+                )
+
+            elif name == "default_db":
+                return await self._default_db(
+                    arguments["db_path"],
+                    arguments["db_name"]
+                )
             
             else:
                 raise ValueError(f"Unknown tool: {name}")
@@ -1254,6 +1309,105 @@ class PowerBIModelServer:
             result = f"Error: Modelo '{model_name}' no encontrado"
         
         return [TextContent(type="text", text=result)]
+
+    async def _analyze_model_usage_bd(
+        self,
+        model_name: str,
+        db_path: Optional[str],
+        semantic_model_id: Optional[str] = None
+    ) -> list[TextContent]:
+        """Analiza uso del modelo en reportes usando DuckDB."""
+        model_path = self.models_path / model_name
+
+        if not model_path.exists():
+            return [TextContent(type="text", text=f"Error: Modelo '{model_name}' no encontrado")]
+
+        model = SemanticModel(str(model_path), semantic_model_id=semantic_model_id)
+        model.load_from_directory(model_path)
+        if semantic_model_id:
+            model.semantic_model_id = semantic_model_id
+
+        if not model.semantic_model_id:
+            return [TextContent(
+                type="text",
+                text=(
+                    "Error: semantic_model_id no definido. "
+                    "Proporciona 'semantic_model_id' o asegúrate de que el modelo lo tenga cargado."
+                )
+            )]
+
+        if not db_path:
+            db_path = str(self.default_db_path)
+
+        try:
+            import duckdb
+            connection = duckdb.connect(db_path)
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error abriendo DuckDB: {e}")]
+
+        try:
+            model.load_dependencies_from_db(connection)
+        finally:
+            try:
+                connection.close()
+            except Exception:
+                pass
+
+        used_tables = set(model.usage_by_table.keys())
+        total_tables = len(model.tables)
+        unused_tables = [t.name for t in model.tables if t.name not in used_tables]
+
+        result = f"=== Análisis de Uso (DuckDB): {model_name} ===\n\n"
+        result += f"DB: {db_path}\n"
+        result += f"Reportes relacionados: {len(model.report_usage)}\n"
+        result += f"Tablas usadas: {len(used_tables)}\n"
+        result += f"Tablas NO usadas: {max(total_tables - len(used_tables), 0)}\n\n"
+
+        if model.report_usage:
+            result += "### Reportes:\n"
+            for report in sorted(model.report_usage, key=lambda r: r["report_name"]):
+                result += (
+                    f"- {report['report_name']}: "
+                    f"{report['total_column_usage']} columnas, "
+                    f"{report['total_measure_usage']} medidas\n"
+                )
+
+        if used_tables:
+            result += "\n### Tablas Usadas:\n"
+            for table_name in sorted(used_tables):
+                table_entry = model.usage_by_table.get(table_name, {})
+                columns_count = sum(table_entry.get("columns", {}).values())
+                measures_count = sum(table_entry.get("measures", {}).values())
+                reports_count = len(table_entry.get("reports", []))
+                result += (
+                    f"- {table_name}: {columns_count} columnas, "
+                    f"{measures_count} medidas, {reports_count} reportes\n"
+                )
+
+        if unused_tables:
+            result += f"\n### Tablas NO Usadas ({len(unused_tables)}):\n"
+            for table in sorted(unused_tables):
+                result += f"- {table}\n"
+
+        return [TextContent(type="text", text=result)]
+
+    async def _default_db(self, db_path: str, db_name: str) -> list[TextContent]:
+        """Actualiza la base DuckDB por defecto usada por el servidor."""
+        new_path = Path(db_path)
+        if not new_path.is_absolute():
+            new_path = (Path.cwd() / new_path).resolve()
+
+        self.default_db_path = new_path
+        self.default_db_name = db_name
+
+        return [TextContent(
+            type="text",
+            text=(
+                f"✅ Base DuckDB por defecto actualizada:\n"
+                f"- Nombre: {self.default_db_name}\n"
+                f"- Ruta: {self.default_db_path}"
+            )
+        )]
     
     async def run(self):
         """Ejecuta el servidor MCP"""
