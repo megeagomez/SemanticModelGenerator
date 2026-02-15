@@ -309,14 +309,6 @@ class PowerBIModelServer:
                     }
                 ),
                 Tool(
-                    name="list_reports",
-                    description="Lista todos los reportes disponibles (.Report)",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {},
-                    }
-                ),
-                Tool(
                     name="analyze_report",
                     description="Analiza un reporte y extrae todas las referencias a tablas y columnas que usa",
                     inputSchema={
@@ -558,9 +550,6 @@ class PowerBIModelServer:
             elif name == "get_model_info":
                 return await self._get_model_info(arguments["model_name"])
             
-            elif name == "list_reports":
-                return await self._list_reports()
-            
             elif name == "analyze_report":
                 return await self._analyze_report(arguments["report_name"])
             
@@ -676,33 +665,6 @@ class PowerBIModelServer:
         
         if len(model.relationships) > 10:
             result += f"... y {len(model.relationships) - 10} más\n"
-        
-        return [TextContent(type="text", text=result)]
-    
-    async def _list_reports(self) -> list[TextContent]:
-        """Lista todos los reportes del workspace actual"""
-        workspace_path = self._get_workspace_path()
-        
-        # Si el directorio no existe, retornar lista vacía con mensaje
-        if not workspace_path.exists():
-            return [TextContent(
-                type="text", 
-                text=f"📁 El directorio del workspace no existe aún: {workspace_path}\n\n"
-                     f"Descarga un workspace primero con 'download_workspace' para crear esta estructura."
-            )]
-        
-        # Escanear reportes en el directorio del workspace
-        reports = [d.name for d in workspace_path.iterdir() 
-                  if d.is_dir() and d.name.endswith('.Report')]
-        
-        result = f"Reportes encontrados ({len(reports)}) en workspace '{self.default_db_name}':\n\n"
-        for report in sorted(reports):
-            result += f"- {report}\n"
-        
-        if not reports:
-            result += "(Ninguno. Descarga un workspace para importar reportes.)"
-        
-        return [TextContent(type="text", text=result)]
         
         return [TextContent(type="text", text=result)]
     
