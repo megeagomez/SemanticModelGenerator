@@ -295,15 +295,6 @@ class PowerBIModelServer:
                     }
                 ),
                 Tool(
-                                   
-                    name="list_semantic_models",
-                    description="Lista todos los modelos semánticos disponibles (.SemanticModel)",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {},
-                    }
-                ),
-                Tool(
                     name="get_model_info",
                     description="Obtiene información detallada de un modelo semántico (tablas, relaciones, culturas)",
                     inputSchema={
@@ -542,9 +533,6 @@ class PowerBIModelServer:
             if name == "set_models_path":
                 return await self._set_models_path(arguments["path"])
 
-            if name == "list_semantic_models":
-                return await self._list_semantic_models()
-
             if name == "powerbi_login_interactive":
                 return await self._powerbi_login_interactive()
             
@@ -645,31 +633,6 @@ class PowerBIModelServer:
         """
         return Path("data") / self.default_db_name
     
-    async def _list_semantic_models(self) -> list[TextContent]:
-        """Lista todos los modelos semánticos del workspace actual"""
-        workspace_path = self._get_workspace_path()
-        
-        # Si el directorio no existe, retornar lista vacía con mensaje
-        if not workspace_path.exists():
-            return [TextContent(
-                type="text", 
-                text=f"📁 El directorio del workspace no existe aún: {workspace_path}\n\n"
-                     f"Descarga un workspace primero con 'download_workspace' para crear esta estructura."
-            )]
-        
-        # Escanear modelos semánticos en el directorio del workspace
-        models = [d.name for d in workspace_path.iterdir() 
-                 if d.is_dir() and d.name.endswith('.SemanticModel')]
-        
-        result = f"Modelos semánticos encontrados ({len(models)}) en workspace '{self.default_db_name}':\n\n"
-        for model in sorted(models):
-            result += f"- {model}\n"
-        
-        if not models:
-            result += "(Ninguno. Descarga un workspace para importar modelos.)"
-        
-        return [TextContent(type="text", text=result)]
-
     async def _set_models_path(self, path_str: str) -> list[TextContent]:
         """Actualiza el directorio base de modelos y reportes."""
         new_path = Path(path_str)
