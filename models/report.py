@@ -25,6 +25,8 @@ class Visual:
         self.position = {}
         self.columns_used = []
         self.measures_used = []
+        self.filterConfig = None
+        self.filters: List[Filter] = []
         
         try:
             with open(self.visual_path, 'r', encoding='utf-8') as f:
@@ -78,6 +80,15 @@ class Visual:
         objects = data.get("visual", {}).get("objects", {})
         self._buscar_campos_en_objetos(objects)
         self._buscar_campos_en_objetos(data)
+        
+        # Filtros a nivel de visual
+        self.filterConfig = data.get("filterConfig", {})
+        if self.filterConfig:
+            self.filters = Filter.extract_from_config(
+                self.filterConfig,
+                filter_type="visual",
+                visual_name=self.name
+            )
 
     def _extraer_campo(self, field):
         """Extrae campos de tipo Column o Measure."""
@@ -169,6 +180,93 @@ class FilterMixin:
         return "Condición de filtro no reconocida o no soportada."
 
 
+class Filter:
+    """Representa un filtro con información de su origen (report, page o visual) y columnas involucradas."""
+
+    def __init__(self, name: str, filter_type: str, table_name: str, column_name: str, 
+                 page_name: str = None, visual_name: str = None, description: str = None):
+        """
+        Args:
+            name: Nombre del filtro
+            filter_type: Tipo de filtro ('report', 'page', o 'visual')
+            table_name: Nombre de la tabla del campo filtrado
+            column_name: Nombre de la columna filtrada
+            page_name: Nombre de la página (si es page o visual filter)
+            visual_name: Nombre del visual (si es visual filter)
+            description: Descripción legible del filtro
+        """
+        self.name = name
+        self.filter_type = filter_type
+        self.table_name = table_name
+        self.column_name = column_name
+        self.page_name = page_name
+        self.visual_name = visual_name
+        self.description = description
+
+    @staticmethod
+    def extract_from_config(filter_config: Dict[str, Any], filter_type: str = "report",
+                           page_name: str = None, visual_name: str = None) -> List['Filter']:
+        """
+        Extrae una lista de Filter objects desde una configuración de filtros.
+        
+        Args:
+            filter_config: Configuración JSON de filtros
+            filter_type: Tipo de filtro ('report', 'page', o 'visual')
+            page_name: Nombre de la página (si es page o visual filter)
+            visual_name: Nombre del visual (si es visual filter)
+        
+        Returns:
+            Lista de objetos Filter
+        """
+        filters = []
+        filter_list = filter_config.get("filters", []) if filter_config else []
+
+        for f in filter_list:
+            name = f.get("name", "Unnamed Filter")
+            field = f.get("field", {}).get("Column", {})
+            table_name = field.get("Expression", {}).get("SourceRef", {}).get("Entity", "UnknownTable")
+            column_name = field.get("Property", "UnknownColumn")
+            
+            # Generar descripción
+            filter_obj = f.get("filter", {})
+            where_clauses = filter_obj.get("Where", [])
+            descriptions = []
+            
+            for clause in where_clauses:
+                condition = clause.get("Condition", {})
+                try:
+                    if "Not" in condition:
+                        desc = f"Se excluyen valores en '{table_name}'.'{column_name}'"
+                    elif "In" in condition:
+                        desc = f"Se incluyen valores en '{table_name}'.'{column_name}'"
+                    elif "Equals" in condition:
+                        desc = f"Es igual a en '{table_name}'.'{column_name}'"
+                    else:
+                        desc = f"Condición desconocida en '{table_name}'.'{column_name}'"
+                    descriptions.append(desc)
+                except Exception:
+                    descriptions.append(f"Error al procesar condición en '{table_name}'.'{column_name}'")
+            
+            description = "; ".join(descriptions) if descriptions else None
+            
+            # Crear objeto Filter
+            filter_obj = Filter(
+                name=name,
+                filter_type=filter_type,
+                table_name=table_name,
+                column_name=column_name,
+                page_name=page_name,
+                visual_name=visual_name,
+                description=description
+            )
+            filters.append(filter_obj)
+        
+        return filters
+
+    def __repr__(self):
+        return f"Filter(name={self.name}, type={self.filter_type}, {self.table_name}.{self.column_name})"
+
+
 class Page(FilterMixin):
     """Representa una página de un informe, incluyendo sus visuales."""
 
@@ -191,7 +289,12 @@ class Page(FilterMixin):
         self.visibility = data.get("visibility")
         self.filterConfig = data.get("filterConfig", {})
 
-        self.filters = self.extract_filter_descriptions(self.filterConfig)
+        self.filter_descriptions = self.extract_filter_descriptions(self.filterConfig)
+        self.filters = Filter.extract_from_config(
+            self.filterConfig,
+            filter_type="page",
+            page_name=self.name
+        )
         self.visuals: List[Visual] = []
         self._load_visuals(page_dir)
 
@@ -696,7 +799,11 @@ class clsReport(FilterMixin):
         self.resourcePackages = data.get("resourcePackages")
         self.settings = data.get("settings")
         self.slowDataSourceSettings = data.get("slowDataSourceSettings")
-        self.allfilters = self.extract_filter_descriptions(self.filterConfig)
+        self.allfilter_descriptions = self.extract_filter_descriptions(self.filterConfig)
+        self.filters = Filter.extract_from_config(
+            self.filterConfig,
+            filter_type="report"
+        )
 
     def _load_pages(self):
         """Carga las páginas del informe desde la carpeta 'pages'."""
@@ -867,11 +974,64 @@ class clsReport(FilterMixin):
             )
         """)
         
+        # Crear secuencias para filtros
+        connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_report_filter_id START 1")
+        connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_report_page_filter_id START 1")
+        connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_report_visual_filter_id START 1")
+        
+        # Crear tabla report_filter (filtros a nivel de reporte)
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS report_filter (
+                id INTEGER PRIMARY KEY DEFAULT nextval('seq_report_filter_id'),
+                report_id INTEGER NOT NULL,
+                filter_name VARCHAR NOT NULL,
+                table_name VARCHAR NOT NULL,
+                column_name VARCHAR NOT NULL,
+                filter_description TEXT,
+                created_at TIMESTAMP DEFAULT now(),
+                FOREIGN KEY(report_id) REFERENCES report(id)
+            )
+        """)
+        
+        # Crear tabla report_page_filter (filtros a nivel de página)
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS report_page_filter (
+                id INTEGER PRIMARY KEY DEFAULT nextval('seq_report_page_filter_id'),
+                report_id INTEGER NOT NULL,
+                page_name VARCHAR NOT NULL,
+                filter_name VARCHAR NOT NULL,
+                table_name VARCHAR NOT NULL,
+                column_name VARCHAR NOT NULL,
+                filter_description TEXT,
+                created_at TIMESTAMP DEFAULT now(),
+                FOREIGN KEY(report_id) REFERENCES report(id)
+            )
+        """)
+        
+        # Crear tabla report_visual_filter (filtros a nivel de visual)
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS report_visual_filter (
+                id INTEGER PRIMARY KEY DEFAULT nextval('seq_report_visual_filter_id'),
+                report_id INTEGER NOT NULL,
+                page_name VARCHAR NOT NULL,
+                visual_name VARCHAR NOT NULL,
+                filter_name VARCHAR NOT NULL,
+                table_name VARCHAR NOT NULL,
+                column_name VARCHAR NOT NULL,
+                filter_description TEXT,
+                created_at TIMESTAMP DEFAULT now(),
+                FOREIGN KEY(report_id) REFERENCES report(id)
+            )
+        """)
+        
         # AHORA SÍ: Limpiar datos antiguos de este reporte (sin dropear las tablas completas)
         connection.execute("DELETE FROM report_measure_used WHERE report_id = ?", [report_id])
         connection.execute("DELETE FROM report_column_used WHERE report_id = ?", [report_id])
         connection.execute("DELETE FROM report_visual WHERE report_id = ?", [report_id])
         connection.execute("DELETE FROM report_page WHERE report_name = ?", [report_name])
+        connection.execute("DELETE FROM report_filter WHERE report_id = ?", [report_id])
+        connection.execute("DELETE FROM report_page_filter WHERE report_id = ?", [report_id])
+        connection.execute("DELETE FROM report_visual_filter WHERE report_id = ?", [report_id])
         
         # Insertar páginas e visuals
         for page in self.pages:
@@ -951,6 +1111,51 @@ class clsReport(FilterMixin):
                         INSERT INTO report_measure_used (report_id, page_name, visual_name, table_name, measure_name, usage_count)
                         VALUES (?, ?, ?, ?, ?, ?)
                     """, [report_id, page.name, visual.name, table, measure, count])
+        
+        # Insertar filtros a nivel de REPORTE
+        for filter_obj in self.filters:
+            connection.execute("""
+                INSERT INTO report_filter (report_id, filter_name, table_name, column_name, filter_description)
+                VALUES (?, ?, ?, ?, ?)
+            """, [
+                report_id,
+                filter_obj.name,
+                filter_obj.table_name,
+                filter_obj.column_name,
+                filter_obj.description
+            ])
+        
+        # Insertar filtros a nivel de PÁGINA y VISUAL
+        for page in self.pages:
+            # Filtros a nivel de página
+            for filter_obj in page.filters:
+                connection.execute("""
+                    INSERT INTO report_page_filter (report_id, page_name, filter_name, table_name, column_name, filter_description)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, [
+                    report_id,
+                    page.name,
+                    filter_obj.name,
+                    filter_obj.table_name,
+                    filter_obj.column_name,
+                    filter_obj.description
+                ])
+            
+            # Filtros a nivel de visual
+            for visual in page.visuals:
+                for filter_obj in visual.filters:
+                    connection.execute("""
+                        INSERT INTO report_visual_filter (report_id, page_name, visual_name, filter_name, table_name, column_name, filter_description)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, [
+                        report_id,
+                        page.name,
+                        visual.name,
+                        filter_obj.name,
+                        filter_obj.table_name,
+                        filter_obj.column_name,
+                        filter_obj.description
+                    ])
 
     def __repr__(self):
         return f"clsReport(model={self.SemanticModel}, model_id={self.semantic_model_id}, pages={len(self.pages)})"
