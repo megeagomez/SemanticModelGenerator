@@ -1101,6 +1101,7 @@ class SemanticModel:
         connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_semantic_model_table_id START 1")
         connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_semantic_model_column_id START 1")
         connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_semantic_model_measure_id START 1")
+        connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_semantic_model_relationship_id START 1")
         
         # Crear tabla semantic_model (sin dropear, para acumular múltiples modelos)
         connection.execute("""
@@ -1194,10 +1195,30 @@ class SemanticModel:
             )
         """)
         
+        # Crear tabla semantic_model_relationship
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS semantic_model_relationship (
+                id INTEGER PRIMARY KEY DEFAULT nextval('seq_semantic_model_relationship_id'),
+                semantic_model_id INTEGER NOT NULL,
+                relationship_name VARCHAR NOT NULL,
+                from_table VARCHAR NOT NULL,
+                from_column VARCHAR NOT NULL,
+                to_table VARCHAR NOT NULL,
+                to_column VARCHAR NOT NULL,
+                cardinality VARCHAR,
+                cross_filtering_behavior VARCHAR,
+                security_filtering_behavior VARCHAR,
+                is_active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT now(),
+                FOREIGN KEY(semantic_model_id) REFERENCES semantic_model(id)
+            )
+        """)
+        
         # AHORA SÍ: Limpiar datos antiguos de este modelo (después de crear las tablas)
         connection.execute("DELETE FROM semantic_model_measure WHERE semantic_model_id = ?", [semantic_model_id])
         connection.execute("DELETE FROM semantic_model_column WHERE semantic_model_id = ?", [semantic_model_id])
         connection.execute("DELETE FROM semantic_model_table WHERE semantic_model_id = ?", [semantic_model_id])
+        connection.execute("DELETE FROM semantic_model_relationship WHERE semantic_model_id = ?", [semantic_model_id])
         
         # Insertar tablas, columnas y medidas
         for table in self.tables:
@@ -1240,3 +1261,21 @@ class SemanticModel:
                     measure.format_string,
                     measure.is_hidden
                 ])
+        
+        # Insertar relaciones
+        for relationship in self.relationships:
+            connection.execute("""
+                INSERT INTO semantic_model_relationship (semantic_model_id, relationship_name, from_table, from_column, to_table, to_column, cardinality, cross_filtering_behavior, security_filtering_behavior, is_active)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, [
+                semantic_model_id,
+                relationship.name,
+                relationship.from_table,
+                relationship.from_column,
+                relationship.to_table,
+                relationship.to_column,
+                relationship.cardinality,
+                relationship.cross_filtering_behavior,
+                relationship.security_filtering_behavior,
+                relationship.is_active
+            ])
