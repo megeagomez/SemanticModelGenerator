@@ -223,13 +223,39 @@ class Filter:
 
         for f in filter_list:
             name = f.get("name", "Unnamed Filter")
-            field = f.get("field", {}).get("Column", {})
-            table_name = field.get("Expression", {}).get("SourceRef", {}).get("Entity", "UnknownTable")
-            column_name = field.get("Property", "UnknownColumn")
+            field_container = f.get("field", {})
             
-            # Generar descripción
-            filter_obj = f.get("filter", {})
-            where_clauses = filter_obj.get("Where", [])
+            # Intentar extraer información de Column, Measure o Aggregation
+            table_name = "UnknownTable"
+            column_name = "UnknownField"
+            field_type_str = "field"
+            
+            # Caso 1: Columna ordinaria
+            if "Column" in field_container:
+                field = field_container.get("Column", {})
+                table_name = field.get("Expression", {}).get("SourceRef", {}).get("Entity", "UnknownTable")
+                column_name = field.get("Property", "UnknownColumn")
+                field_type_str = "column"
+            
+            # Caso 2: Medida
+            elif "Measure" in field_container:
+                field = field_container.get("Measure", {})
+                table_name = field.get("Expression", {}).get("SourceRef", {}).get("Entity", "UnknownTable")
+                column_name = field.get("Property", "UnknownMeasure")
+                field_type_str = "measure"
+            
+            # Caso 3: Agregación
+            elif "Aggregation" in field_container:
+                field = field_container.get("Aggregation", {})
+                # Las agregaciones tienen estructura diferente
+                col_field = field.get("Expression", {}).get("Column", {})
+                table_name = col_field.get("Expression", {}).get("SourceRef", {}).get("Entity", "UnknownTable")
+                column_name = col_field.get("Property", "UnknownAggregation")
+                field_type_str = "aggregation"
+            
+            # Generar descripción basada en condiciones
+            filter_config_obj = f.get("filter", {})
+            where_clauses = filter_config_obj.get("Where", [])
             descriptions = []
             
             for clause in where_clauses:
@@ -241,25 +267,39 @@ class Filter:
                         desc = f"Se incluyen valores en '{table_name}'.'{column_name}'"
                     elif "Equals" in condition:
                         desc = f"Es igual a en '{table_name}'.'{column_name}'"
+                    elif "Comparison" in condition:
+                        comp = condition.get("Comparison", {})
+                        comp_kind = comp.get("ComparisonKind", -1)
+                        comparison_types = {
+                            0: "igual a",
+                            1: "mayor que",
+                            2: "menor que",
+                            3: "mayor o igual que",
+                            4: "menor o igual que",
+                            5: "no igual a"
+                        }
+                        comp_str = comparison_types.get(comp_kind, "comparación desconocida")
+                        desc = f"Filtro de {field_type_str} where '{column_name}' es {comp_str}"
                     else:
                         desc = f"Condición desconocida en '{table_name}'.'{column_name}'"
                     descriptions.append(desc)
-                except Exception:
-                    descriptions.append(f"Error al procesar condición en '{table_name}'.'{column_name}'")
+                except Exception as e:
+                    descriptions.append(f"Error al procesar condición en '{table_name}'.'{column_name}': {str(e)}")
             
             description = "; ".join(descriptions) if descriptions else None
             
-            # Crear objeto Filter
-            filter_obj = Filter(
-                name=name,
-                filter_type=filter_type,
-                table_name=table_name,
-                column_name=column_name,
-                page_name=page_name,
-                visual_name=visual_name,
-                description=description
-            )
-            filters.append(filter_obj)
+            # Solo crear Filter si hay información válida
+            if table_name != "UnknownTable" or column_name != "UnknownField":
+                filter_obj = Filter(
+                    name=name,
+                    filter_type=filter_type,
+                    table_name=table_name,
+                    column_name=column_name,
+                    page_name=page_name,
+                    visual_name=visual_name,
+                    description=description
+                )
+                filters.append(filter_obj)
         
         return filters
 
