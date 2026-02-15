@@ -57,6 +57,60 @@ source .venv/bin/activate
 # pip install -r requirements.txt
 ```
 
+## ⚙️ Configuración del MCP Server
+
+El servidor MCP está configurado para almacenar todos los datos, caché y bases de datos en una ubicación centralizada. Por defecto, esta ruta es `D:/mcpdata`, pero puedes cambiarla según tu sistema.
+
+### Cambiar la ruta de datos del MCP
+
+**Opción 1: Modificar la configuración en Python**
+
+Cuando inicies el MCP server desde código, puedes especificar la ruta:
+
+```python
+from mcp_server import PowerBIModelServer
+from pathlib import Path
+
+# Usar ruta personalizada
+server = PowerBIModelServer(
+    models_path=Path("Modelos"),
+    data_path="D:/mcpdata"  # Cambiar a tu ruta preferida
+)
+```
+
+**Opción 2: Usar en diferentes sistemas**
+
+- **Windows:** `D:/mcpdata` o `C:/ProgramData/mcpdata`
+- **Linux/Mac:** `/opt/mcpdata` o `$HOME/.mcpdata`
+
+### Estructura de carpetas
+
+Una vez configurada, el MCP creará automáticamente la siguiente estructura:
+
+```
+D:/mcpdata/
+├── demostracion.duckdb       # BD por defecto
+├── powerbi.duckdb            # BD de importaciones
+├── powerbiinfo.json          # Información de workspaces
+├── powerbi_auth_status.json  # Estado de autenticación
+├── fabric_token_cache.json   # Token de autenticación (creado tras login)
+└── DemoADN/                  # Workspace descargado
+    ├── modelo.SemanticModel/
+    ├── modelo.Report/
+    └── ...
+```
+
+### Cambiar ruta en tiempo de ejecución
+
+Si necesitas cambiar la ruta de datos mientras el servidor está ejecutándose:
+
+```python
+from Importer.src.import_from_powerbi import set_data_path
+
+# Cambiar ruta antes de hacer login
+set_data_path("D:/otra_ruta")
+```
+
 ## 🔧 Uso Básico
 
 ### Cargar y copiar un modelo completo

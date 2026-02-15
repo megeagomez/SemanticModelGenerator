@@ -28,7 +28,9 @@ class PowerBIModelServer:
     async def _powerbi_login_interactive(self) -> list[TextContent]:
         """Inicia el login interactivo a Power BI y devuelve el link y el código para autenticarse."""
         try:
-            from Importer.src.import_from_powerbi import start_device_flow_interactive
+            from Importer.src.import_from_powerbi import start_device_flow_interactive, set_data_path
+            # Configurar la ruta de datos
+            set_data_path(str(self.data_path))
         except Exception as e:
             return [TextContent(type="text", text=f"Error importando módulo de login: {e}")]
 
@@ -243,11 +245,15 @@ class PowerBIModelServer:
                  f"Error: {error}"
         )]
 
-    async def _powerbi_download_workspace(self, workspace_name: str, destination_path: str = "data", db_name: str = "powerbi") -> list[TextContent]:
+    async def _powerbi_download_workspace(self, workspace_name: str, destination_path: str = None, db_name: str = "powerbi") -> list[TextContent]:
         """Descarga un workspace completo de Power BI (modelos semánticos y reportes)."""
         import os
         import traceback
         import logging
+        
+        # Usar data_path configurada si no se especifica destination_path
+        if destination_path is None:
+            destination_path = str(self.data_path)
         
         logger = logging.getLogger(__name__)
         
@@ -296,11 +302,12 @@ class PowerBIModelServer:
             logger.error(error_msg)
             return [TextContent(type="text", text=f"{error_msg}\n\n💡 Verifica que:\n- El nombre del workspace sea correcto\n- Tengas permisos para acceder al workspace\n- La autenticación sea válida")]
 
-    def __init__(self, models_path: Path):
+    def __init__(self, models_path: Path, data_path: str = "D:/mcpdata"):
         self.models_path = models_path
+        self.data_path = Path(data_path)  # Ruta configurable para datos, caché y BD
         self.server = Server("powerbi-semantic-model")
         self.default_db_name = "demostracion"
-        self.default_db_path = Path("data") / "demostracion.duckdb"
+        self.default_db_path = self.data_path / "demostracion.duckdb"
         self._register_handlers()
     
     def _register_handlers(self):
@@ -385,7 +392,7 @@ class PowerBIModelServer:
                 ),
                 Tool(
                     name="powerbi_download_workspace",
-                    description="Descarga un workspace completo de Power BI (todos los modelos semánticos y reportes). Requiere especificar la ruta de destino y el nombre de la base de datos para guardar metainformación.",
+                    description="Descarga un workspace completo de Power BI (todos los modelos semánticos y reportes) a la ruta configurada en el MCP.",
                     inputSchema={
                         "type": "object",
                         "properties": {
@@ -395,8 +402,7 @@ class PowerBIModelServer:
                             },
                             "destination_path": {
                                 "type": "string",
-                                "description": "Ruta donde guardar los archivos descargados (default: 'data')",
-                                "default": "data"
+                                "description": "Ruta donde guardar los archivos descargados (default: ruta configurada en MCP, ej: D:/mcpdata)"
                             },
                             "db_name": {
                                 "type": "string",
@@ -750,10 +756,10 @@ class PowerBIModelServer:
     def _get_workspace_path(self) -> Path:
         """Obtiene la ruta del directorio de workspace basado en default_db_name.
         
-        Retorna: Path("data") / self.default_db_name
-        Ej: Path("data/demostracion") para default_db_name = "demostracion"
+        Retorna: self.data_path / self.default_db_name
+        Ej: D:/mcpdata/demostracion para default_db_name = "demostracion"
         """
-        return Path("data") / self.default_db_name
+        return self.data_path / self.default_db_name
     
     def _get_reports_from_db(self) -> tuple[bool, list, str]:
         """Intenta consultar reportes desde la BD predeterminada.

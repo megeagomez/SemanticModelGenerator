@@ -26,6 +26,25 @@ logger = logging.getLogger(__name__)
 # Variable global para mantener el downloader y el flow activo
 _active_auth_flow: dict[str, Any] = {"downloader": None, "flow": None, "message": None, "thread": None}
 
+# Ruta global configurable para datos
+_data_path = Path("D:/mcpdata")
+
+
+def set_data_path(path: str) -> None:
+    """Configura la ruta global para datos, caché y BD.
+    
+    Args:
+        path: Ruta absoluta o relativa donde guardar datos (ej: "D:/mcpdata")
+    """
+    global _data_path
+    _data_path = Path(path)
+    _data_path.mkdir(parents=True, exist_ok=True)
+
+
+def get_data_path() -> Path:
+    """Obtiene la ruta global configurada para datos."""
+    return _data_path
+
 
 def start_device_flow_interactive():
     """Inicia el device flow y devuelve el mensaje (link + código) SIN bloquear."""
@@ -83,7 +102,7 @@ def start_device_flow_interactive():
                     downloader.save_token_to_file(downloader.access_token)
                     
                     # Guardar archivo de estado
-                    status_file = Path("data") / "powerbi_auth_status.json"
+                    status_file = _data_path / "powerbi_auth_status.json"
                     status_file.parent.mkdir(exist_ok=True)
                     status_data = {
                         "authenticated": True,
@@ -124,7 +143,7 @@ def start_device_flow_interactive():
 def check_auth_status():
     """Verifica si la autenticación se completó."""
     # Primero verificar si hay archivo de estado
-    status_file = Path("data") / "powerbi_auth_status.json"
+    status_file = _data_path / "powerbi_auth_status.json"
     if status_file.exists():
         try:
             status_data = json.loads(status_file.read_text())
