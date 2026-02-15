@@ -69,15 +69,40 @@ class PowerBIModelServer:
     async def _powerbi_logout(self) -> list[TextContent]:
         """Cierra la sesión actual borrando el token de autenticación.
         Esto permite conectarse a otro tenant.
+        Limpia tanto archivos como variables globales en memoria.
         """
         try:
-            token_file = Path(__file__).parent / "fabric_token_cache.json"
+            # Importar la variable global para limpiarla
+            from Importer.src import import_from_powerbi
             
+            files_deleted = []
+            
+            # Borrar archivo de token
+            token_file = Path(__file__).parent / "fabric_token_cache.json"
             if token_file.exists():
                 token_file.unlink()
-                return [TextContent(type="text", text=f"✅ Sesión cerrada correctamente. Se borró el token de autenticación.\n\nAhora puedes conectarte a otro tenant usando 'powerbi_login_interactive'.")]
+                files_deleted.append("fabric_token_cache.json")
+            
+            # Borrar archivo de estado de autenticación
+            status_file = Path(__file__).parent / "data" / "powerbi_auth_status.json"
+            if status_file.exists():
+                status_file.unlink()
+                files_deleted.append("powerbi_auth_status.json")
+            
+            # Limpiar variable global _active_auth_flow
+            import_from_powerbi._active_auth_flow = {
+                "downloader": None, 
+                "flow": None, 
+                "message": None, 
+                "thread": None,
+                "status": None,
+                "app": None
+            }
+            
+            if files_deleted:
+                return [TextContent(type="text", text=f"✅ Sesión cerrada correctamente.\n\n📄 Archivos eliminados:\n• {chr(10).join(files_deleted)}\n\n💾 Estado en memoria limpiado.\n\nAhora puedes conectarte a otro tenant usando 'powerbi_login_interactive'.")]
             else:
-                return [TextContent(type="text", text=f"ℹ️ No hay sesión activa. No se encontró token de autenticación.")]
+                return [TextContent(type="text", text=f"ℹ️ No hay sesión activa. Se limpió cualquier estado residual en memoria.\n\nPuedes iniciar sesión en otro tenant con 'powerbi_login_interactive'.")]
             
         except Exception as e:
             return [TextContent(type="text", text=f"❌ Error al cerrar sesión: {e}")]
