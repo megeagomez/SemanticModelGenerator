@@ -764,6 +764,7 @@ class clsReport(FilterMixin):
         self.pageOrder = []
         self.activePageName = None
         self.allfilters = []
+        self.filters: List[Filter] = []
         self.pages: List[Page] = []
         self.SemanticModel = ""
         self.semantic_model_id = None
