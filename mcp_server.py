@@ -66,6 +66,22 @@ class PowerBIModelServer:
         except Exception as e:
             return [TextContent(type="text", text=f"Error verificando estado: {e}")]
 
+    async def _powerbi_logout(self) -> list[TextContent]:
+        """Cierra la sesión actual borrando el token de autenticación.
+        Esto permite conectarse a otro tenant.
+        """
+        try:
+            token_file = Path(__file__).parent / "fabric_token_cache.json"
+            
+            if token_file.exists():
+                token_file.unlink()
+                return [TextContent(type="text", text=f"✅ Sesión cerrada correctamente. Se borró el token de autenticación.\n\nAhora puedes conectarte a otro tenant usando 'powerbi_login_interactive'.")]
+            else:
+                return [TextContent(type="text", text=f"ℹ️ No hay sesión activa. No se encontró token de autenticación.")]
+            
+        except Exception as e:
+            return [TextContent(type="text", text=f"❌ Error al cerrar sesión: {e}")]
+
     async def _powerbi_list_workspaces(self) -> list[TextContent]:
         """Lista todos los workspaces de Power BI disponibles."""
         try:
@@ -293,6 +309,14 @@ class PowerBIModelServer:
                 Tool(
                     name="powerbi_check_auth_status",
                     description="Verifica el estado de la autenticación de Power BI. Usa este comando para confirmar que el login se completó exitosamente.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {},
+                    }
+                ),
+                Tool(
+                    name="powerbi_logout",
+                    description="Cierra la sesión actual y borra el token de autenticación. Necesario para conectarse a otro tenant.",
                     inputSchema={
                         "type": "object",
                         "properties": {},
@@ -608,6 +632,9 @@ class PowerBIModelServer:
             
             if name == "powerbi_check_auth_status":
                 return await self._powerbi_check_auth_status()
+            
+            if name == "powerbi_logout":
+                return await self._powerbi_logout()
             
             if name == "powerbi_list_workspaces":
                 return await self._powerbi_list_workspaces()
