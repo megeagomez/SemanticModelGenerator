@@ -91,52 +91,116 @@ class PowerBIModelServer:
             return [TextContent(type="text", text=f"Error listando workspaces: {e}")]
 
     async def _powerbi_list_reports(self, workspace_id: str) -> list[TextContent]:
-        """Lista todos los reportes de un workspace."""
+        """Lista reportes con 3 comportamientos:
+        1. Si está autenticado en Power BI → usa API
+        2. Si hay BD predeterminada → lista desde BD
+        3. Si no → informa al usuario
+        """
         try:
-            from Importer.src.import_from_powerbi import powerbi_list_reports
+            from Importer.src.import_from_powerbi import check_auth_status, powerbi_list_reports
         except Exception as e:
             return [TextContent(type="text", text=f"Error importando módulo: {e}")]
 
+        # 1. Verificar si hay autenticación Power BI
         try:
-            result = powerbi_list_reports(workspace_id)
-            
-            if not result["success"]:
-                return [TextContent(type="text", text=result["message"])]
-            
-            reports = result["reports"]
-            output = f"📊 Reportes en el workspace ({len(reports)}):\n\n"
-            for rep in reports:
-                output += f"• {rep.get('displayName', rep.get('name', 'N/A'))}\n"
-                output += f"  ID: {rep['id']}\n\n"
-            
+            auth_result = check_auth_status()
+            if auth_result.get("authenticated"):
+                # Usar API de Power BI
+                try:
+                    result = powerbi_list_reports(workspace_id)
+                    if not result["success"]:
+                        return [TextContent(type="text", text=result["message"])]
+                    
+                    reports = result["reports"]
+                    output = f"📊 Reportes en el workspace (desde Power BI API) ({len(reports)}):\n\n"
+                    for rep in reports:
+                        output += f"• {rep.get('displayName', rep.get('name', 'N/A'))}\n"
+                        output += f"  ID: {rep['id']}\n\n"
+                    
+                    return [TextContent(type="text", text=output)]
+                except Exception as e:
+                    return [TextContent(type="text", text=f"Error usando API: {e}")]
+        except Exception:
+            pass
+        
+        # 2. Si no está autenticado, intentar usar BD predeterminada
+        success, reports, error = self._get_reports_from_db()
+        if success:
+            output = f"📊 Reportes en el workspace (desde DuckDB) ({len(reports)}):\n\n"
+            output += f"📁 Base de datos: {self.default_db_path}\n\n"
+            for report_id, name, report_id_col, workspace_id_col in reports:
+                output += f"• {name}\n"
+                output += f"  ID: {report_id}\n\n"
             return [TextContent(type="text", text=output)]
-            
-        except Exception as e:
-            return [TextContent(type="text", text=f"Error listando reportes: {e}")]
+        
+        # 3. Si no hay BD ni autenticación, mostrar mensaje de ayuda
+        return [TextContent(
+            type="text",
+            text=f"❌ No se puede listar reportes\n\n"
+                 f"Tienes 2 opciones:\n\n"
+                 f"1️⃣ **Autenticar en Power BI:**\n"
+                 f"   Usa 'powerbi_login_interactive' para iniciar la autenticación\n\n"
+                 f"2️⃣ **Usar una base de datos local:**\n"
+                 f"   Usa 'default_db' para seleccionar una base de datos DuckDB descargada\n"
+                 f"   BD actual: {self.default_db_path}\n\n"
+                 f"Error: {error}"
+        )]
 
     async def _powerbi_list_semantic_models(self, workspace_id: str) -> list[TextContent]:
-        """Lista todos los modelos semánticos de un workspace."""
+        """Lista modelos semánticos con 3 comportamientos:
+        1. Si está autenticado en Power BI → usa API
+        2. Si hay BD predeterminada → lista desde BD
+        3. Si no → informa al usuario
+        """
         try:
-            from Importer.src.import_from_powerbi import powerbi_list_semantic_models
+            from Importer.src.import_from_powerbi import check_auth_status, powerbi_list_semantic_models
         except Exception as e:
             return [TextContent(type="text", text=f"Error importando módulo: {e}")]
 
+        # 1. Verificar si hay autenticación Power BI
         try:
-            result = powerbi_list_semantic_models(workspace_id)
-            
-            if not result["success"]:
-                return [TextContent(type="text", text=result["message"])]
-            
-            models = result["models"]
-            output = f"📦 Modelos semánticos en el workspace ({len(models)}):\n\n"
-            for model in models:
-                output += f"• {model.get('displayName', model.get('name', 'N/A'))}\n"
-                output += f"  ID: {model['id']}\n\n"
-            
+            auth_result = check_auth_status()
+            if auth_result.get("authenticated"):
+                # Usar API de Power BI
+                try:
+                    result = powerbi_list_semantic_models(workspace_id)
+                    if not result["success"]:
+                        return [TextContent(type="text", text=result["message"])]
+                    
+                    models = result["models"]
+                    output = f"📦 Modelos semánticos en el workspace (desde Power BI API) ({len(models)}):\n\n"
+                    for model in models:
+                        output += f"• {model.get('displayName', model.get('name', 'N/A'))}\n"
+                        output += f"  ID: {model['id']}\n\n"
+                    
+                    return [TextContent(type="text", text=output)]
+                except Exception as e:
+                    return [TextContent(type="text", text=f"Error usando API: {e}")]
+        except Exception:
+            pass
+        
+        # 2. Si no está autenticado, intentar usar BD predeterminada
+        success, models, error = self._get_semantic_models_from_db()
+        if success:
+            output = f"📦 Modelos semánticos en el workspace (desde DuckDB) ({len(models)}):\n\n"
+            output += f"📁 Base de datos: {self.default_db_path}\n\n"
+            for model_id, semantic_model_id, workspace_id_col, name in models:
+                output += f"• {name}\n"
+                output += f"  ID: {model_id}\n\n"
             return [TextContent(type="text", text=output)]
-            
-        except Exception as e:
-            return [TextContent(type="text", text=f"Error listando modelos: {e}")]
+        
+        # 3. Si no hay BD ni autenticación, mostrar mensaje de ayuda
+        return [TextContent(
+            type="text",
+            text=f"❌ No se puede listar modelos semánticos\n\n"
+                 f"Tienes 2 opciones:\n\n"
+                 f"1️⃣ **Autenticar en Power BI:**\n"
+                 f"   Usa 'powerbi_login_interactive' para iniciar la autenticación\n\n"
+                 f"2️⃣ **Usar una base de datos local:**\n"
+                 f"   Usa 'default_db' para seleccionar una base de datos DuckDB descargada\n"
+                 f"   BD actual: {self.default_db_path}\n\n"
+                 f"Error: {error}"
+        )]
 
     async def _powerbi_download_workspace(self, workspace_name: str, destination_path: str = "data", db_name: str = "powerbi") -> list[TextContent]:
         """Descarga un workspace completo de Power BI (modelos semánticos y reportes)."""
@@ -621,6 +685,42 @@ class PowerBIModelServer:
         Ej: Path("data/demostracion") para default_db_name = "demostracion"
         """
         return Path("data") / self.default_db_name
+    
+    def _get_reports_from_db(self) -> tuple[bool, list, str]:
+        """Intenta consultar reportes desde la BD predeterminada.
+        
+        Returns:
+            (success: bool, reports: list, message: str)
+        """
+        if not self.default_db_path.exists():
+            return False, [], f"BD no encontrada: {self.default_db_path}"
+        
+        try:
+            import duckdb
+            connection = duckdb.connect(str(self.default_db_path), read_only=True)
+            reports = connection.execute("SELECT id, name, report_id, workspace_id FROM report ORDER BY name").fetchall()
+            connection.close()
+            return True, reports, ""
+        except Exception as e:
+            return False, [], str(e)
+    
+    def _get_semantic_models_from_db(self) -> tuple[bool, list, str]:
+        """Intenta consultar modelos semánticos desde la BD predeterminada.
+        
+        Returns:
+            (success: bool, models: list, message: str)
+        """
+        if not self.default_db_path.exists():
+            return False, [], f"BD no encontrada: {self.default_db_path}"
+        
+        try:
+            import duckdb
+            connection = duckdb.connect(str(self.default_db_path), read_only=True)
+            models = connection.execute("SELECT id, semantic_model_id, workspace_id, name FROM semantic_model ORDER BY name").fetchall()
+            connection.close()
+            return True, models, ""
+        except Exception as e:
+            return False, [], str(e)
     
     async def _set_models_path(self, path_str: str) -> list[TextContent]:
         """Actualiza el directorio base de modelos y reportes."""
