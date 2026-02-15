@@ -6,6 +6,7 @@ from .table import Table, Column, Measure, Partition
 from .culture import Culture
 from .platform import Platform
 from .definition import Definition
+from .workspace import Workspace
 
 __all__ = [
     'SemanticModel',
@@ -19,7 +20,8 @@ __all__ = [
     'Culture',
     'Platform',
     'Definition',
+    'clsReport',
     'Visual',
     'Page',
-    'clsReport'
+    'Workspace',
 ]

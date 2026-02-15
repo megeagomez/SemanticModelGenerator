@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(current_dir, '../../')))
 
 from models.semantic_model import SemanticModel
 from models.report import clsReport
+from models.workspace import Workspace
 from FabricItemDownloader import FabricItemDownloader
 
 logger = logging.getLogger(__name__)
@@ -452,7 +453,6 @@ class PowerBIImporter:
         workspace_id = ws['id']
         workspace_name = ws.get('displayName', workspace_id)
 
-
         # Archivo de información global
         info_path = os.path.join(destination_path, "powerbiinfo.json")
         if os.path.exists(info_path):
@@ -469,18 +469,29 @@ class PowerBIImporter:
         else:
             ws_entry["name"] = workspace_name  # Actualiza nombre si cambió
 
-
+        # Crear conexión DuckDB (PASO PREVIO antes de procesar modelos y reportes)
+        db_path = os.path.join(destination_path, f"{db_name}.duckdb")
+        os.makedirs(destination_path, exist_ok=True)
+        conn = duckdb.connect(db_path)
+        logger.info(f"📊 Base de datos DuckDB creada en: {db_path}")
+        
+        # GUARDAR WORKSPACES EN LA BD (paso previo orquestado)
+        logger.info(f"💾 Guardando información de workspaces en BD...")
+        for ws_data in workspaces:
+            try:
+                workspace_obj = Workspace.from_powerbi_response(ws_data)
+                workspace_obj.save_to_database(conn)
+                logger.info(f"✅ Workspace guardado: {workspace_obj.displayName}")
+            except Exception as e:
+                logger.warning(f"⚠️ No se pudo guardar workspace {ws_data.get('displayName')}: {e}")
+        
+        logger.info(f"✅ Workspaces guardados en BD")
+        
         # Descargar modelos semánticos y parsear/serializar
         semantic_models = self.fabric_item_downloader.list_semantic_models(workspace_id)
         ws_entry["semantic_models"] = []
         output_dir = os.path.join("output")
         os.makedirs(output_dir, exist_ok=True)
-        
-        # Crear conexión DuckDB
-        db_path = os.path.join(destination_path, f"{db_name}.duckdb")
-        os.makedirs(destination_path, exist_ok=True)
-        conn = duckdb.connect(db_path)
-        logger.info(f"📊 Base de datos DuckDB creada en: {db_path}")
         
         logger.info(f"📥 Procesando {len(semantic_models)} modelos semánticos...")
         for model in semantic_models:
