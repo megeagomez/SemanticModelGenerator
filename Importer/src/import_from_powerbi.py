@@ -568,7 +568,7 @@ class PowerBIImporter:
             if os.path.exists(report_folder):
                 try:
                     logger.info(f"✅ Parseando reporte {report_name}...")
-                    report_obj = clsReport(report_folder, report_id=report_id, workspace_id=workspace_id)
+                    report_obj = clsReport(report_folder, report_id=report_id, workspace_id=workspace_id, report_name=report_name)
                     report_obj.save_to_database(conn)
                     with open(os.path.join(output_dir, f"{workspace_name}__{report_name}__report.pkl"), "wb") as pf:
                         pickle.dump(report_obj, pf)

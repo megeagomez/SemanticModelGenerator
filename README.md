@@ -30,6 +30,7 @@ Biblioteca de Python para manipular modelos semánticos de Power BI (archivos `.
 - **Creación de submodelos** con filtrado inteligente de tablas y relaciones
 - **Filtrado de elementos** (columnas, medidas, jerarquías) con modos include/exclude
 - **Análisis de reportes** (.Report) para extraer columnas y medidas usadas
+  - ✅ **Soporte Dual de Formatos:** PBIR (nuevo) y Legacy (antiguo)
 - **Generación de SVG** de páginas de reportes con visuales
 - **Preservación de metadatos** y propiedades originales
 - **Soporte para TMDL** (formato de definición de modelos tabulares)

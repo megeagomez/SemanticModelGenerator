@@ -746,12 +746,24 @@ class Page(FilterMixin):
 class clsReport(FilterMixin):
     """Clase principal para cargar y representar un informe completo."""
 
-    def __init__(self, root_path: str, report_id: str = None, workspace_id: str = None):
+    def __init__(self, root_path: str, report_id: str = None, workspace_id: str = None, report_name: str = None):
         self.root_path = root_path
         self.report_id = report_id  # ID del reporte desde Microsoft Fabric
         self.workspace_id = workspace_id  # ID del workspace desde Microsoft Fabric
+        self.report_name = report_name  # Nombre del reporte (displayName desde Power BI)
         self.report_path = self._find_report_json()
-        self.pages_path = os.path.join(os.path.dirname(self.report_path), 'pages') if self.report_path else None
+        self.report_format = None  # Se establecerá en _load_report_json()
+        self._report_data = None  # Almacenar datos raw del report.json
+        
+        # Determinar ruta de páginas basado en formato encontrado
+        if self.report_path:
+            report_dir = os.path.dirname(self.report_path)
+            # Si report.json está en .../definition/, las páginas estarán en .../definition/pages/
+            # Si report.json está en raíz, las páginas estarán en ./pages/
+            potential_pages_path = os.path.join(report_dir, 'pages')
+            self.pages_path = potential_pages_path if os.path.isdir(potential_pages_path) else None
+        else:
+            self.pages_path = None
         
         self.schema = None
         self.themeCollection = None
@@ -770,9 +782,14 @@ class clsReport(FilterMixin):
         self.semantic_model_id = None
         
         if self.report_path:
+            print(f"📄 Parseando report.json...")
             self._load_report_json()
-        if self.pages_path and os.path.isdir(self.pages_path):
+            
+            # Cargar páginas basado en el formato detectado
+            print(f"📑 Cargando páginas...")
             self._load_pages()
+        else:
+            print(f"⚠️ No se pudo encontrar report.json para {root_path}")
 
     def _extract_semantic_model_name(self):
         """Extrae el nombre del modelo semántico desde definition.pbir"""
@@ -809,13 +826,32 @@ class clsReport(FilterMixin):
         return None
     
     def _find_report_json(self) -> Optional[str]:
-        """Busca el archivo report.json dentro de la carpeta 'definition'."""
+        """Busca el archivo report.json en dos formatos:
+        1. Formato nuevo PBIR: carpeta 'definition/report.json'
+        2. Formato antiguo: 'report.json' en la raíz
+        """
+        if not os.path.exists(self.root_path):
+            print(f"⚠️ La ruta del reporte NO EXISTE: {self.root_path}")
+            return None
+        
+        # Caso 1: Buscar en formato nuevo (PBIR) - dentro de carpeta 'definition/'
         for root, dirs, files in os.walk(self.root_path):
             if 'definition' in dirs:
                 definition_path = os.path.join(root, 'definition')
                 report_path = os.path.join(definition_path, 'report.json')
                 if os.path.isfile(report_path):
+                    print(f"✅ Encontrado report.json (formato PBIR) en: {report_path}")
                     return report_path
+        
+        # Caso 2: Buscar en formato antiguo - report.json en la raíz
+        report_path = os.path.join(self.root_path, 'report.json')
+        if os.path.isfile(report_path):
+            print(f"✅ Encontrado report.json (formato antiguo) en: {report_path}")
+            return report_path
+        
+        # Si no encuentra nada, mostrar información de debug
+        print(f"❌ report.json NO ENCONTRADO en: {self.root_path}")
+        print(f"   Carpetas/archivos en raíz: {os.listdir(self.root_path) if os.path.exists(self.root_path) else 'N/A'}")
         return None
 
     def _load_report_json(self):
@@ -832,6 +868,10 @@ class clsReport(FilterMixin):
             print(f"Error al cargar report.json: {e}")
             data = {}
 
+        # Detectar formato: PBIR (con $schema) o antiguo (con sections y config)
+        self.report_format = "pbir" if "$schema" in data else "legacy"
+        print(f"   Formato detectado: {self.report_format.upper()}")
+        
         self.schema = data.get("$schema")
         self.themeCollection = data.get("themeCollection")
         self.filterConfig = data.get("filterConfig", {})
@@ -840,6 +880,10 @@ class clsReport(FilterMixin):
         self.resourcePackages = data.get("resourcePackages")
         self.settings = data.get("settings")
         self.slowDataSourceSettings = data.get("slowDataSourceSettings")
+        
+        # Almacenar los datos crudos para formato antiguo
+        self._report_data = data
+        
         self.allfilter_descriptions = self.extract_filter_descriptions(self.filterConfig)
         self.filters = Filter.extract_from_config(
             self.filterConfig,
@@ -847,7 +891,17 @@ class clsReport(FilterMixin):
         )
 
     def _load_pages(self):
-        """Carga las páginas del informe desde la carpeta 'pages'."""
+        """Carga las páginas del informe desde la carpeta 'pages' (PBIR) o desde 'sections' (legacy)."""
+        
+        if self.report_format == "legacy":
+            self._load_legacy_pages()
+        elif self.pages_path and os.path.isdir(self.pages_path):
+            self._load_pbir_pages()
+        else:
+            print(f"⚠️ No se encontraron páginas (format={self.report_format}, pages_path={self.pages_path})")
+    
+    def _load_pbir_pages(self):
+        """Carga las páginas en formato PBIR desde la carpeta 'pages'."""
         if not self.pages_path:
             return
         pages_metadata_file = os.path.join(self.pages_path, 'pages.json')
@@ -864,6 +918,70 @@ class clsReport(FilterMixin):
             page_file = os.path.join(page_dir, 'page.json')
             if os.path.isfile(page_file):
                 self.pages.append(Page(page_dir))
+    
+    def _load_legacy_pages(self):
+        """Carga las páginas en formato legacy desde el array 'sections' del report.json."""
+        if not self._report_data:
+            return
+        
+        sections = self._report_data.get('sections', [])
+        for idx, section in enumerate(sections):
+            try:
+                # Crear un objeto Page simulado desde cada section
+                page = self._create_page_from_legacy_section(section, idx)
+                if page:
+                    self.pages.append(page)
+                    # Agregar el ID de la página al pageOrder
+                    if 'name' in section:
+                        self.pageOrder.append(section['name'])
+            except Exception as e:
+                print(f"Error al procesar legacy section {idx}: {e}")
+        
+        # Establecer la primera página como activa si no hay información
+        if self.pages and not self.activePageName:
+            self.activePageName = self.pages[0].name if hasattr(self.pages[0], 'name') else 'Page 1'
+    
+    def _create_page_from_legacy_section(self, section: dict, section_index: int) -> Optional['Page']:
+        """Crea un objeto Page a partir de una section del formato legacy."""
+        try:
+            # Extraer información básica de la section
+            page_name = section.get('name', f'Page {section_index + 1}')
+            display_name = section.get('displayName', page_name)
+            
+            # Crear un directorio temporal para almacenar los datos de la página
+            # Usar pages_path si existe, sino usar el root_path
+            base_dir = self.pages_path if self.pages_path else self.root_path
+            temp_page_dir = os.path.join(base_dir, f'_legacy_{section_index}')
+            
+            # Crear el directorio si no existe
+            os.makedirs(temp_page_dir, exist_ok=True)
+            
+            # Crear el objeto Page
+            # NOTA: El constructor de Page espera un directorio con page.json
+            # Para legacy, crearemos un page.json temporal
+            page_data = {
+                'name': page_name,
+                'displayName': display_name,
+                'filters': section.get('filters', []),
+                'height': section.get('height'),
+                'width': section.get('width'),
+                'visualContainers': section.get('visualContainers', [])
+            }
+            
+            # Guardar el page.json temporal
+            page_json_path = os.path.join(temp_page_dir, 'page.json')
+            with open(page_json_path, 'w', encoding='utf-8') as f:
+                json.dump(page_data, f, indent=2)
+            
+            # Crear el objeto Page desde el directorio
+            page = Page(temp_page_dir)
+            return page
+            
+        except Exception as e:
+            print(f"Error al crear Page desde legacy section: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
 
     def get_all_columns_used(self) -> Dict[str, Set[str]]:
         """Retorna todas las columnas usadas en el informe organizadas por tabla."""
@@ -892,8 +1010,8 @@ class clsReport(FilterMixin):
         Args:
             connection: Conexión DuckDB (duckdb.DuckDBPyConnection)
         """
-        # Obtener nombre del reporte desde la ruta si SemanticModel está vacío
-        report_name = self.SemanticModel if self.SemanticModel else os.path.basename(self.root_path)
+        # Obtener nombre del reporte: usar el pasado en constructor > SemanticModel > nombre carpeta
+        report_name = self.report_name or self.SemanticModel or os.path.basename(self.root_path)
         if not report_name:
             report_name = "unknown_report"
         
