@@ -782,14 +782,14 @@ class clsReport(FilterMixin):
         self.semantic_model_id = None
         
         if self.report_path:
-            print(f"📄 Parseando report.json...")
+            print(f"[INFO] Parseando report.json...")
             self._load_report_json()
             
             # Cargar páginas basado en el formato detectado
-            print(f"📑 Cargando páginas...")
+            print(f"[INFO] Cargando paginas...")
             self._load_pages()
         else:
-            print(f"⚠️ No se pudo encontrar report.json para {root_path}")
+            print(f"[WARN] No se pudo encontrar report.json para {root_path}")
 
     def _extract_semantic_model_name(self):
         """Extrae el nombre del modelo semántico desde definition.pbir"""
@@ -840,18 +840,18 @@ class clsReport(FilterMixin):
                 definition_path = os.path.join(root, 'definition')
                 report_path = os.path.join(definition_path, 'report.json')
                 if os.path.isfile(report_path):
-                    print(f"✅ Encontrado report.json (formato PBIR) en: {report_path}")
+                    print(f"[OK] Encontrado report.json (formato PBIR) en: {report_path}")
                     return report_path
         
         # Caso 2: Buscar en formato antiguo - report.json en la raíz
         report_path = os.path.join(self.root_path, 'report.json')
         if os.path.isfile(report_path):
-            print(f"✅ Encontrado report.json (formato antiguo) en: {report_path}")
+            print(f"[OK] Encontrado report.json (formato antiguo) en: {report_path}")
             return report_path
         
         # Si no encuentra nada, mostrar información de debug
-        print(f"❌ report.json NO ENCONTRADO en: {self.root_path}")
-        print(f"   Carpetas/archivos en raíz: {os.listdir(self.root_path) if os.path.exists(self.root_path) else 'N/A'}")
+        print(f"[ERROR] report.json NO ENCONTRADO en: {self.root_path}")
+        print(f"   Carpetas/archivos en raiz: {os.listdir(self.root_path) if os.path.exists(self.root_path) else 'N/A'}")
         return None
 
     def _load_report_json(self):
@@ -956,16 +956,45 @@ class clsReport(FilterMixin):
             # Crear el directorio si no existe
             os.makedirs(temp_page_dir, exist_ok=True)
             
-            # Crear el objeto Page
-            # NOTA: El constructor de Page espera un directorio con page.json
-            # Para legacy, crearemos un page.json temporal
+            # Crear el subdirectorio 'visuals' para almacenar los visuals
+            visuals_dir = os.path.join(temp_page_dir, 'visuals')
+            os.makedirs(visuals_dir, exist_ok=True)
+            
+            # Extraer visualContainers y crear archivos visual.json individuales
+            visual_containers = section.get('visualContainers', [])
+            for visual_idx, visual_container in enumerate(visual_containers):
+                # Extraer el config del visual
+                visual_config = visual_container.get('config', '{}')
+                
+                # Si config es un string JSON, parsearlo
+                if isinstance(visual_config, str):
+                    try:
+                        visual_data = json.loads(visual_config)
+                    except json.JSONDecodeError:
+                        print(f"⚠️  No se pudo parsear visual config como JSON en visual {visual_idx}")
+                        visual_data = {}
+                else:
+                    visual_data = visual_config
+                
+                # Obtener el nombre del visual o usar un nombre por defecto
+                visual_name = visual_data.get('name', f'visual_{visual_idx}')
+                
+                # Crear subdirectorio para este visual
+                visual_dir = os.path.join(visuals_dir, visual_name)
+                os.makedirs(visual_dir, exist_ok=True)
+                
+                # Guardar el visual.json
+                visual_json_path = os.path.join(visual_dir, 'visual.json')
+                with open(visual_json_path, 'w', encoding='utf-8') as f:
+                    json.dump(visual_data, f, indent=2)
+            
+            # Crear el page.json (sin visualContainers, ya que ahora están en archivos separados)
             page_data = {
                 'name': page_name,
                 'displayName': display_name,
                 'filters': section.get('filters', []),
                 'height': section.get('height'),
-                'width': section.get('width'),
-                'visualContainers': section.get('visualContainers', [])
+                'width': section.get('width')
             }
             
             # Guardar el page.json temporal
@@ -1003,6 +1032,78 @@ class clsReport(FilterMixin):
                     table_measures[table].add(measure)
         return dict(table_measures)
 
+    def _infer_workspace_and_report_id(self, connection):
+        """
+        Intenta inferir workspace_id y report_id desde la base de datos usando los nombres del path.
+        
+        Path ejemplo: "D:\\mcpdata\\toyota\\TES - CONCESIONARIOS\\TES - Gestión Comercial.Report"
+        - Workspace name: "TES - CONCESIONARIOS" (carpeta padre)
+        - Report name: "TES - Gestión Comercial" (basename sin .Report)
+        
+        Args:
+            connection: Conexión DuckDB
+        """
+        try:
+            # Extraer workspace name del path (carpeta padre del .Report)
+            parent_path = os.path.dirname(self.root_path)
+            workspace_name = os.path.basename(parent_path)
+            
+            # Extraer report name del path (basename sin .Report)
+            basename = os.path.basename(self.root_path)
+            report_name = basename.replace('.Report', '')
+            
+            # Intentar buscar workspace_id si es nulo
+            if not self.workspace_id and workspace_name:
+                try:
+                    # Verificar que la tabla workspace existe
+                    tables = connection.execute("SHOW TABLES").fetchall()
+                    table_names = [t[0] for t in tables]
+                    
+                    if 'workspace' in table_names:
+                        result = connection.execute(
+                            "SELECT id FROM workspace WHERE name = ?", 
+                            [workspace_name]
+                        ).fetchone()
+                        
+                        if result:
+                            self.workspace_id = result[0]
+                            print(f"[INFO] Workspace ID inferido: {self.workspace_id} ('{workspace_name}')")
+                except Exception as e:
+                    # No hay problema si falla, puede ser la primera vez
+                    pass
+            
+            # Intentar buscar report_id si es nulo
+            if not self.report_id and report_name:
+                try:
+                    # Verificar que la tabla report existe
+                    tables = connection.execute("SHOW TABLES").fetchall()
+                    table_names = [t[0] for t in tables]
+                    
+                    if 'report' in table_names:
+                        # Buscar por nombre y workspace_id si lo tenemos
+                        if self.workspace_id:
+                            result = connection.execute(
+                                "SELECT report_id FROM report WHERE name = ? AND workspace_id = ?", 
+                                [report_name, self.workspace_id]
+                            ).fetchone()
+                        else:
+                            # Buscar solo por nombre si no tenemos workspace_id
+                            result = connection.execute(
+                                "SELECT report_id FROM report WHERE name = ?", 
+                                [report_name]
+                            ).fetchone()
+                        
+                        if result:
+                            self.report_id = result[0]
+                            print(f"[INFO] Report ID inferido: {self.report_id} ('{report_name}')")
+                except Exception as e:
+                    # No hay problema si falla, puede ser la primera vez
+                    pass
+                    
+        except Exception as e:
+            # Si algo falla en todo el proceso, no importa
+            pass
+
     def save_to_database(self, connection):
         """
         Guarda el reporte en DuckDB.
@@ -1010,8 +1111,17 @@ class clsReport(FilterMixin):
         Args:
             connection: Conexión DuckDB (duckdb.DuckDBPyConnection)
         """
-        # Obtener nombre del reporte: usar el pasado en constructor > SemanticModel > nombre carpeta
-        report_name = self.report_name or self.SemanticModel or os.path.basename(self.root_path)
+        # Intentar inferir workspace_id y report_id desde la base de datos si son nulos
+        self._infer_workspace_and_report_id(connection)
+        
+        # Obtener nombre del reporte: usar el pasado en constructor > SemanticModel > nombre desde path
+        if self.report_name:
+            report_name = self.report_name
+        else:
+            # Extraer nombre del path quitando .Report
+            basename = os.path.basename(self.root_path)
+            report_name = basename.replace('.Report', '') if basename else self.SemanticModel
+        
         if not report_name:
             report_name = "unknown_report"
         
