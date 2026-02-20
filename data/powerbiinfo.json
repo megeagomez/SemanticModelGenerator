@@ -75,6 +75,30 @@
           "name": "semanticAdventureworks"
         }
       ]
+    },
+    {
+      "id": "a792c21d-4da0-47d1-8f59-6b74b7a0d312",
+      "name": "My workspace",
+      "reports": [
+        {
+          "id": "5f6956c3-693f-433d-a910-62c6fb20d89a",
+          "name": "Getting Started in Power BI"
+        },
+        {
+          "id": "2445b5b1-c7ab-4d27-b7f3-ec7c9657ff1c",
+          "name": "demo1"
+        }
+      ],
+      "semantic_models": [
+        {
+          "id": "a166c244-5163-47d1-8d4c-f8210c2108cb",
+          "name": "Getting Started in Power BI"
+        },
+        {
+          "id": "0fe8371b-b61c-4217-a889-3100a52b1d25",
+          "name": "demo1"
+        }
+      ]
     }
   ]
 }

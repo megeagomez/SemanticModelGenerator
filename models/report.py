@@ -27,7 +27,8 @@ class Visual:
         self.measures_used = []
         self.filterConfig = None
         self.filters: List[Filter] = []
-        
+        self.entity_alias_map = {}  # Nuevo: mapeo alias->entidad real
+
         try:
             with open(self.visual_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
@@ -37,7 +38,22 @@ class Visual:
 
         self.name = data.get("name")
         self.visualType = data.get("visual", {}).get("visualType")
-   
+
+        # Guardar mapeo de alias a entidad real si existe prototypeQuery.From
+        proto_query = data.get('prototypeQuery')
+        if self.name=="15e0a871ec2dc852776c":
+            print(f"DEBUG Visual {self.name}: prototypeQuery={proto_query}")
+        if proto_query and isinstance(proto_query, dict):
+            from_list = proto_query.get('From')
+            if self.name=="15e0a871ec2dc852776c":
+                print(f"DEBUG Visual {self.name}: prototypeQuery.From={from_list}")
+            if isinstance(from_list, list):
+                for entry in from_list:
+                    if isinstance(entry, dict) and 'Name' in entry and 'Entity' in entry:
+                        self.entity_alias_map[entry['Name']] = entry['Entity']
+        if self.name=="15e0a871ec2dc852776c":
+            print(f"DEBUG Visual {self.name}: entity_alias_map={self.entity_alias_map}")
+
         # Posición
         pos = data.get("position", {})
         self.position = {
@@ -62,14 +78,24 @@ class Visual:
             if "navigationSection" in props:
                 nav_expr = props["navigationSection"].get("expr", {}).get("Literal", {}).get("Value", "")
                 self.navigationTarget = nav_expr.strip("'")
+        if self.name=="15e0a871ec2dc852776c":
+            print(f"DEBUG Visual {self.name}: navigationTarget='{self.navigationTarget}'")
+        # Campos usados en queryState (recorrer todos los posibles apartados)
+        query_state = data.get("visual", {}).get("query", {}).get("queryState", {})
+        if isinstance(query_state, dict):
+            for key, value in query_state.items():
+                if isinstance(value, dict) and "projections" in value:
+                    projections = value.get("projections", [])
+                    if self.name=="15e0a871ec2dc852776c":
+                        print(f"DEBUG Visual {self.name}: key={key}, projections={projections}")
+                    for proj in projections:
+                        if self.name=="15e0a871ec2dc852776c":
+                            print(f"DEBUG Visual {self.name}: llamando _extraer_campo con {proj.get('field', {})}, queryRef={proj.get('queryRef')}")
+                        self._extraer_campo(proj.get("field", {}), proj.get("queryRef"))
 
-        # Campos usados en queryState
-        projections = data.get("visual", {}).get("query", {}).get("queryState", {}).get("Values", {}).get("projections", [])
-        for proj in projections:
-            self._extraer_campo(proj.get("field", {}))
-        projections = data.get("visual", {}).get("query", {}).get("queryState", {}).get("Values", {}).get("Indicator", {}).get("projections", [])
-        for proj in projections:
-            self._extraer_campo(proj.get("field", {}))
+        # Debug: mostrar measures_used y columns_used tras parsear projections
+        if self.name=="15e0a871ec2dc852776c":
+            print(f"DEBUG Visual {self.name}: measures_used={self.measures_used}, columns_used={self.columns_used}")
 
         # Campos usados en sortDefinition
         sort_fields = data.get("visual", {}).get("query", {}).get("sortDefinition", {}).get("sort", [])
@@ -90,37 +116,76 @@ class Visual:
                 visual_name=self.name
             )
 
-    def _extraer_campo(self, field):
-        """Extrae campos de tipo Column o Measure."""
+    def _extraer_campo(self, field, query_ref=None):
+        """Extrae campos de tipo Column o Measure, usando queryRef si está presente y distinguiendo tipo. Sustituye alias por entidad real si es necesario."""
+        if self.name=="15e0a871ec2dc852776c":
+            print(f"DEBUG _extraer_campo: field={field}, query_ref={query_ref}")
+        # Si hay query_ref, usarlo y distinguir tipo
+        if query_ref:
+            if "Measure" in field:
+                self.measures_used.append(query_ref)
+                if self.name=="15e0a871ec2dc852776c":
+                    print(f"DEBUG _extraer_campo: añadido medida por queryRef {query_ref}")
+                return
+            elif "Column" in field:
+                self.columns_used.append(query_ref)
+                if self.name=="15e0a871ec2dc852776c":
+                    print(f"DEBUG _extraer_campo: añadido columna por queryRef {query_ref}")
+                return
+        # Si no hay query_ref, parseo tradicional
         if "Column" in field:
             ref = field["Column"]
-            try:
-                entity = ref.get("Expression", {}).get("SourceRef", {}).get("Entity")
-            except Exception:
-                entity = ref
-            try:
-                prop = ref.get("Property")
-            except Exception:
-                prop = ref
-            if entity and prop:
-                self.columns_used.append(f"{entity}.{prop}")
+            table_name = ref.get("Table") or ref.get("Entity")
+            if not table_name:
+                table_name = ref.get("Expression", {}).get("SourceRef", {}).get("Entity")
+                if not table_name:
+                    table_name = ref.get("Expression", {}).get("SourceRef", {}).get("Source")
+            if self.name=="15e0a871ec2dc852776c":
+                print(f"DEBUG _extraer_campo: alias_map={self.entity_alias_map}")
+                print(f"DEBUG _extraer_campo: table_name antes sustitucion: {table_name}")
+            # Sustituir alias por entidad real si corresponde
+            if table_name in self.entity_alias_map:
+                table_name_real = self.entity_alias_map[table_name]
+                if self.name=="15e0a871ec2dc852776c":
+                    print(f"DEBUG _extraer_campo: alias columna {table_name} sustituido por {table_name_real}")
+                table_name = table_name_real
+            if self.name=="15e0a871ec2dc852776c":
+                print(f"DEBUG _extraer_campo: table_name despues sustitucion: {table_name}")
+            prop = ref.get("Property")
+            if prop:
+                self.columns_used.append(f"{table_name}.{prop}" if table_name else f"{prop}")
+                if self.name=="15e0a871ec2dc852776c":
+                    print(f"DEBUG _extraer_campo: añadido columna {table_name}.{prop}")
         elif "Measure" in field:
             ref = field["Measure"]
-            try:
-                entity = ref.get("Expression", {}).get("SourceRef", {}).get("Entity")
-            except Exception:
-                entity = ref
-            try:
-                prop = ref.get("Property")
-            except Exception:
-                prop = ref
-            if entity and prop:
-                self.measures_used.append(f"{entity}.{prop}")
+            table_name = ref.get("Table") or ref.get("Entity")
+            if not table_name:
+                table_name = ref.get("Expression", {}).get("SourceRef", {}).get("Entity")
+                if not table_name:
+                    table_name = ref.get("Expression", {}).get("SourceRef", {}).get("Source")
+            if self.name=="15e0a871ec2dc852776c":
+                print(f"DEBUG _extraer_campo: alias_map={self.entity_alias_map}")
+                print(f"DEBUG _extraer_campo: table_name antes sustitucion: {table_name}")
+            # Sustituir alias por entidad real si corresponde
+            if table_name in self.entity_alias_map:
+                table_name_real = self.entity_alias_map[table_name]
+                if self.name=="15e0a871ec2dc852776c":
+                    print(f"DEBUG _extraer_campo: alias medida {table_name} sustituido por {table_name_real}")
+                table_name = table_name_real
+            if self.name=="15e0a871ec2dc852776c":
+                print(f"DEBUG _extraer_campo: table_name despues sustitucion: {table_name}")
+            prop = ref.get("Property")
+            if prop:
+                self.measures_used.append(f"{table_name}.{prop}" if table_name else f"{prop}")
+                if self.name=="15e0a871ec2dc852776c":
+                    print(f"DEBUG _extraer_campo: añadido medida {table_name}.{prop}")
 
     def _buscar_campos_en_objetos(self, obj):
         """Busca recursivamente campos en objetos visuales."""
         if isinstance(obj, dict):
             for key, value in obj.items():
+                if self.name=="15e0a871ec2dc852776c" and key =="Goal":
+                    print(f"DEBUG _buscar_campos_en_objetos: key={key}, value={value}")
                 if key in ["Measure", "Column"]:
                     if isinstance(value, dict) and "Expression" in value and "Property" in value:
                         self._extraer_campo({key: value})
@@ -470,7 +535,7 @@ class Page(FilterMixin):
         return f"""
         <g transform='translate({x},{y})'>
             <rect width='{w}' height='{h}' fill='none' stroke='#999' rx='4' ry='4'/>
-            <text x='{w/2}' y='{h/2}' font-family='Segoe UI' font-size='14' fill='#333' text-anchor='middle' dominant-baseline='middle'>{label}</text>
+            <text x='10' y='15' font-family='Segoe UI' font-size='14' fill='#333'>{label}</text>
         </g>
         """
 
@@ -947,25 +1012,27 @@ class clsReport(FilterMixin):
             # Extraer información básica de la section
             page_name = section.get('name', f'Page {section_index + 1}')
             display_name = section.get('displayName', page_name)
+            if section_index==16:
+                print(f"Debug: Procesando section {section_index} - name: {page_name}, displayName: {display_name}")
             
             # Crear un directorio temporal para almacenar los datos de la página
             # Usar pages_path si existe, sino usar el root_path
             base_dir = self.pages_path if self.pages_path else self.root_path
             temp_page_dir = os.path.join(base_dir, f'_legacy_{section_index}')
-            
+
             # Crear el directorio si no existe
             os.makedirs(temp_page_dir, exist_ok=True)
-            
+
             # Crear el subdirectorio 'visuals' para almacenar los visuals
             visuals_dir = os.path.join(temp_page_dir, 'visuals')
             os.makedirs(visuals_dir, exist_ok=True)
-            
+
             # Extraer visualContainers y crear archivos visual.json individuales
             visual_containers = section.get('visualContainers', [])
             for visual_idx, visual_container in enumerate(visual_containers):
                 # Extraer el config del visual
                 visual_config = visual_container.get('config', '{}')
-                
+
                 # Si config es un string JSON, parsearlo
                 if isinstance(visual_config, str):
                     try:
@@ -975,14 +1042,43 @@ class clsReport(FilterMixin):
                         visual_data = {}
                 else:
                     visual_data = visual_config
+
+
+                # Buscar mapeo de alias a entidad real en prototypeQuery.From
+                alias_map = {}
+                proto_query = visual_data.get('prototypeQuery')
+                if proto_query and isinstance(proto_query, dict):
+                    from_list = proto_query.get('From')
+                    if isinstance(from_list, list):
+                        for entry in from_list:
+                            if isinstance(entry, dict) and 'Name' in entry and 'Entity' in entry:
+                                alias_map[entry['Name']] = entry['Entity']
                 
+                def sustituir_source_ref(obj):
+                    if isinstance(obj, dict):
+                        for k, v in obj.items():
+                            # Solo sustituir en SourceRef
+                            if k == 'SourceRef' and isinstance(v, dict):
+                                # Sustituir solo en Source y Entity
+                                if 'Source' in v and v['Source'] in alias_map:
+                                    v['Source'] = alias_map[v['Source']]
+                                if 'Entity' in v and v['Entity'] in alias_map:
+                                    v['Entity'] = alias_map[v['Entity']]
+                            else:
+                                sustituir_source_ref(v)
+                    elif isinstance(obj, list):
+                        for item in obj:
+                            sustituir_source_ref(item)
+
+                sustituir_source_ref(visual_data)
+
                 # Obtener el nombre del visual o usar un nombre por defecto
                 visual_name = visual_data.get('name', f'visual_{visual_idx}')
-                
+
                 # Crear subdirectorio para este visual
                 visual_dir = os.path.join(visuals_dir, visual_name)
                 os.makedirs(visual_dir, exist_ok=True)
-                
+
                 # Guardar el visual.json
                 visual_json_path = os.path.join(visual_dir, 'visual.json')
                 with open(visual_json_path, 'w', encoding='utf-8') as f:
@@ -1037,7 +1133,7 @@ class clsReport(FilterMixin):
         Intenta inferir workspace_id y report_id desde la base de datos usando los nombres del path.
         
         Path ejemplo: "D:\\mcpdata\\toyota\\TES - CONCESIONARIOS\\TES - Gestión Comercial.Report"
-        - Workspace name: "TES - CONCESIONARIOS" (carpeta padre)
+        - Workspace name: "TES - CONCESIONARIOS" (carpeta padre del .Report)
         - Report name: "TES - Gestión Comercial" (basename sin .Report)
         
         Args:
@@ -1114,14 +1210,8 @@ class clsReport(FilterMixin):
         # Intentar inferir workspace_id y report_id desde la base de datos si son nulos
         self._infer_workspace_and_report_id(connection)
         
-        # Obtener nombre del reporte: usar el pasado en constructor > SemanticModel > nombre desde path
-        if self.report_name:
-            report_name = self.report_name
-        else:
-            # Extraer nombre del path quitando .Report
-            basename = os.path.basename(self.root_path)
-            report_name = basename.replace('.Report', '') if basename else self.SemanticModel
-        
+        # Obtener nombre del reporte: usar el pasado en constructor > SemanticModel > nombre carpeta
+        report_name = self.report_name  or os.path.basename(self.root_path) or self.SemanticModel
         if not report_name:
             report_name = "unknown_report"
         
