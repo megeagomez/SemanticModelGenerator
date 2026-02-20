@@ -1129,23 +1129,56 @@ class SemanticModel:
         model_data_access = json.dumps(self.model.data_access_options) if self.model and self.model.data_access_options else None
         model_annotations = json.dumps(self.model.annotations) if self.model and self.model.annotations else None
         
-        connection.execute("""
-            INSERT INTO semantic_model (semantic_model_id, workspace_id, name, culture, default_power_bi_data_source_version, source_query_culture, data_access_options, annotations)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, [
-            self.semantic_model_id,
-            self.workspace_id,
-            model_name,
-            model_culture,
-            self.model.default_power_bi_data_source_version if self.model else None,
-            self.model.source_query_culture if self.model else None,
-            model_data_access,
-            model_annotations
-        ])
         
-        # Obtener ID del modelo insertado
-        result = connection.execute("SELECT id FROM semantic_model WHERE semantic_model_id = ?", [self.semantic_model_id]).fetchall()
-        semantic_model_id = result[0][0] if result else None
+        # Buscar si el modelo ya existe (por semantic_model_id o por nombre)
+        semantic_model_id = None
+        if self.semantic_model_id:
+            result = connection.execute("SELECT id FROM semantic_model WHERE semantic_model_id = ?", [self.semantic_model_id]).fetchall()
+            semantic_model_id = result[0][0] if result else None
+        if not semantic_model_id:
+            result = connection.execute("SELECT id FROM semantic_model WHERE name = ?", [model_name]).fetchall()
+            semantic_model_id = result[0][0] if result else None
+        
+        if semantic_model_id:
+            # Ya existe: actualizar el registro principal
+            connection.execute("""
+                UPDATE semantic_model SET semantic_model_id = ?, workspace_id = ?, name = ?, culture = ?, 
+                       default_power_bi_data_source_version = ?, source_query_culture = ?, 
+                       data_access_options = ?, annotations = ?, updated_at = now()
+                WHERE id = ?
+            """, [
+                self.semantic_model_id,
+                self.workspace_id,
+                model_name,
+                model_culture,
+                self.model.default_power_bi_data_source_version if self.model else None,
+                self.model.source_query_culture if self.model else None,
+                model_data_access,
+                model_annotations,
+                semantic_model_id
+            ])
+        else:
+            # No existe: insertar nuevo
+            connection.execute("""
+                INSERT INTO semantic_model (semantic_model_id, workspace_id, name, culture, default_power_bi_data_source_version, source_query_culture, data_access_options, annotations)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, [
+                self.semantic_model_id,
+                self.workspace_id,
+                model_name,
+                model_culture,
+                self.model.default_power_bi_data_source_version if self.model else None,
+                self.model.source_query_culture if self.model else None,
+                model_data_access,
+                model_annotations
+            ])
+            # Obtener ID del registro recién insertado
+            if self.semantic_model_id:
+                result = connection.execute("SELECT id FROM semantic_model WHERE semantic_model_id = ?", [self.semantic_model_id]).fetchall()
+                semantic_model_id = result[0][0] if result else None
+            if not semantic_model_id:
+                result = connection.execute("SELECT id FROM semantic_model WHERE name = ?", [model_name]).fetchall()
+                semantic_model_id = result[0][0] if result else None
         
         if not semantic_model_id:
             print(f"⚠️ No se pudo obtener el ID del modelo {model_name}")

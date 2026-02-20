@@ -41,18 +41,16 @@ class Visual:
 
         # Guardar mapeo de alias a entidad real si existe prototypeQuery.From
         proto_query = data.get('prototypeQuery')
-        if self.name=="15e0a871ec2dc852776c":
-            print(f"DEBUG Visual {self.name}: prototypeQuery={proto_query}")
+        if not proto_query:
+            sv= data.get("singleVisual")
+            if sv and isinstance(sv, dict):
+                proto_query = sv.get('prototypeQuery')
         if proto_query and isinstance(proto_query, dict):
             from_list = proto_query.get('From')
-            if self.name=="15e0a871ec2dc852776c":
-                print(f"DEBUG Visual {self.name}: prototypeQuery.From={from_list}")
             if isinstance(from_list, list):
                 for entry in from_list:
                     if isinstance(entry, dict) and 'Name' in entry and 'Entity' in entry:
                         self.entity_alias_map[entry['Name']] = entry['Entity']
-        if self.name=="15e0a871ec2dc852776c":
-            print(f"DEBUG Visual {self.name}: entity_alias_map={self.entity_alias_map}")
 
         # Posición
         pos = data.get("position", {})
@@ -78,24 +76,15 @@ class Visual:
             if "navigationSection" in props:
                 nav_expr = props["navigationSection"].get("expr", {}).get("Literal", {}).get("Value", "")
                 self.navigationTarget = nav_expr.strip("'")
-        if self.name=="15e0a871ec2dc852776c":
-            print(f"DEBUG Visual {self.name}: navigationTarget='{self.navigationTarget}'")
+
         # Campos usados en queryState (recorrer todos los posibles apartados)
         query_state = data.get("visual", {}).get("query", {}).get("queryState", {})
         if isinstance(query_state, dict):
             for key, value in query_state.items():
                 if isinstance(value, dict) and "projections" in value:
                     projections = value.get("projections", [])
-                    if self.name=="15e0a871ec2dc852776c":
-                        print(f"DEBUG Visual {self.name}: key={key}, projections={projections}")
                     for proj in projections:
-                        if self.name=="15e0a871ec2dc852776c":
-                            print(f"DEBUG Visual {self.name}: llamando _extraer_campo con {proj.get('field', {})}, queryRef={proj.get('queryRef')}")
                         self._extraer_campo(proj.get("field", {}), proj.get("queryRef"))
-
-        # Debug: mostrar measures_used y columns_used tras parsear projections
-        if self.name=="15e0a871ec2dc852776c":
-            print(f"DEBUG Visual {self.name}: measures_used={self.measures_used}, columns_used={self.columns_used}")
 
         # Campos usados en sortDefinition
         sort_fields = data.get("visual", {}).get("query", {}).get("sortDefinition", {}).get("sort", [])
@@ -118,19 +107,19 @@ class Visual:
 
     def _extraer_campo(self, field, query_ref=None):
         """Extrae campos de tipo Column o Measure, usando queryRef si está presente y distinguiendo tipo. Sustituye alias por entidad real si es necesario."""
-        if self.name=="15e0a871ec2dc852776c":
-            print(f"DEBUG _extraer_campo: field={field}, query_ref={query_ref}")
         # Si hay query_ref, usarlo y distinguir tipo
         if query_ref:
+            # Resolver alias en queryRef (formato típico: "alias.Property")
+            resolved_ref = query_ref
+            if '.' in query_ref:
+                alias_part, prop_part = query_ref.split('.', 1)
+                if alias_part in self.entity_alias_map:
+                    resolved_ref = f"{self.entity_alias_map[alias_part]}.{prop_part}"
             if "Measure" in field:
-                self.measures_used.append(query_ref)
-                if self.name=="15e0a871ec2dc852776c":
-                    print(f"DEBUG _extraer_campo: añadido medida por queryRef {query_ref}")
+                self.measures_used.append(resolved_ref)
                 return
             elif "Column" in field:
-                self.columns_used.append(query_ref)
-                if self.name=="15e0a871ec2dc852776c":
-                    print(f"DEBUG _extraer_campo: añadido columna por queryRef {query_ref}")
+                self.columns_used.append(resolved_ref)
                 return
         # Si no hay query_ref, parseo tradicional
         if "Column" in field:
@@ -140,22 +129,12 @@ class Visual:
                 table_name = ref.get("Expression", {}).get("SourceRef", {}).get("Entity")
                 if not table_name:
                     table_name = ref.get("Expression", {}).get("SourceRef", {}).get("Source")
-            if self.name=="15e0a871ec2dc852776c":
-                print(f"DEBUG _extraer_campo: alias_map={self.entity_alias_map}")
-                print(f"DEBUG _extraer_campo: table_name antes sustitucion: {table_name}")
             # Sustituir alias por entidad real si corresponde
-            if table_name in self.entity_alias_map:
-                table_name_real = self.entity_alias_map[table_name]
-                if self.name=="15e0a871ec2dc852776c":
-                    print(f"DEBUG _extraer_campo: alias columna {table_name} sustituido por {table_name_real}")
-                table_name = table_name_real
-            if self.name=="15e0a871ec2dc852776c":
-                print(f"DEBUG _extraer_campo: table_name despues sustitucion: {table_name}")
+            if table_name and table_name in self.entity_alias_map:
+                table_name = self.entity_alias_map[table_name]
             prop = ref.get("Property")
             if prop:
                 self.columns_used.append(f"{table_name}.{prop}" if table_name else f"{prop}")
-                if self.name=="15e0a871ec2dc852776c":
-                    print(f"DEBUG _extraer_campo: añadido columna {table_name}.{prop}")
         elif "Measure" in field:
             ref = field["Measure"]
             table_name = ref.get("Table") or ref.get("Entity")
@@ -163,29 +142,17 @@ class Visual:
                 table_name = ref.get("Expression", {}).get("SourceRef", {}).get("Entity")
                 if not table_name:
                     table_name = ref.get("Expression", {}).get("SourceRef", {}).get("Source")
-            if self.name=="15e0a871ec2dc852776c":
-                print(f"DEBUG _extraer_campo: alias_map={self.entity_alias_map}")
-                print(f"DEBUG _extraer_campo: table_name antes sustitucion: {table_name}")
             # Sustituir alias por entidad real si corresponde
-            if table_name in self.entity_alias_map:
-                table_name_real = self.entity_alias_map[table_name]
-                if self.name=="15e0a871ec2dc852776c":
-                    print(f"DEBUG _extraer_campo: alias medida {table_name} sustituido por {table_name_real}")
-                table_name = table_name_real
-            if self.name=="15e0a871ec2dc852776c":
-                print(f"DEBUG _extraer_campo: table_name despues sustitucion: {table_name}")
+            if table_name and table_name in self.entity_alias_map:
+                table_name = self.entity_alias_map[table_name]
             prop = ref.get("Property")
             if prop:
                 self.measures_used.append(f"{table_name}.{prop}" if table_name else f"{prop}")
-                if self.name=="15e0a871ec2dc852776c":
-                    print(f"DEBUG _extraer_campo: añadido medida {table_name}.{prop}")
 
     def _buscar_campos_en_objetos(self, obj):
         """Busca recursivamente campos en objetos visuales."""
         if isinstance(obj, dict):
             for key, value in obj.items():
-                if self.name=="15e0a871ec2dc852776c" and key =="Goal":
-                    print(f"DEBUG _buscar_campos_en_objetos: key={key}, value={value}")
                 if key in ["Measure", "Column"]:
                     if isinstance(value, dict) and "Expression" in value and "Property" in value:
                         self._extraer_campo({key: value})
@@ -210,8 +177,21 @@ class FilterMixin:
 
         for f in filters:
             name = f.get("name", "Unnamed Filter")
-            field = f.get("field", {}).get("Column", {})
-            entity = field.get("Expression", {}).get("SourceRef", {}).get("Entity", "UnknownEntity")
+            # PBIR usa "field", legacy usa "expression"
+            field = f.get("field", f.get("expression", {})).get("Column", {})
+            entity = field.get("Expression", {}).get("SourceRef", {}).get("Entity", "")
+            if not entity:
+                # Resolver alias desde filter.From
+                source = field.get("Expression", {}).get("SourceRef", {}).get("Source", "")
+                filter_from = f.get("filter", {}).get("From", [])
+                alias_map = {}
+                if isinstance(filter_from, list):
+                    for entry in filter_from:
+                        if isinstance(entry, dict) and 'Name' in entry and 'Entity' in entry:
+                            alias_map[entry['Name']] = entry['Entity']
+                entity = alias_map.get(source, source) if source else "UnknownEntity"
+            if not entity:
+                entity = "UnknownEntity"
             column = field.get("Property", "UnknownColumn")
             filter_obj = f.get("filter", {})
             where_clauses = filter_obj.get("Where", [])
@@ -288,24 +268,43 @@ class Filter:
 
         for f in filter_list:
             name = f.get("name", "Unnamed Filter")
-            field_container = f.get("field", {})
+            # PBIR usa "field", legacy usa "expression"
+            field_container = f.get("field", f.get("expression", {}))
             
             # Intentar extraer información de Column, Measure o Aggregation
             table_name = "UnknownTable"
             column_name = "UnknownField"
             field_type_str = "field"
             
+            # Construir alias_map desde filter.From si existe
+            filter_from = f.get("filter", {}).get("From", [])
+            alias_map = {}
+            if isinstance(filter_from, list):
+                for entry in filter_from:
+                    if isinstance(entry, dict) and 'Name' in entry and 'Entity' in entry:
+                        alias_map[entry['Name']] = entry['Entity']
+            
             # Caso 1: Columna ordinaria
             if "Column" in field_container:
                 field = field_container.get("Column", {})
-                table_name = field.get("Expression", {}).get("SourceRef", {}).get("Entity", "UnknownTable")
+                table_name = field.get("Expression", {}).get("SourceRef", {}).get("Entity", "")
+                if not table_name:
+                    source = field.get("Expression", {}).get("SourceRef", {}).get("Source", "")
+                    table_name = alias_map.get(source, source) if source else "UnknownTable"
+                if not table_name:
+                    table_name = "UnknownTable"
                 column_name = field.get("Property", "UnknownColumn")
                 field_type_str = "column"
             
             # Caso 2: Medida
             elif "Measure" in field_container:
                 field = field_container.get("Measure", {})
-                table_name = field.get("Expression", {}).get("SourceRef", {}).get("Entity", "UnknownTable")
+                table_name = field.get("Expression", {}).get("SourceRef", {}).get("Entity", "")
+                if not table_name:
+                    source = field.get("Expression", {}).get("SourceRef", {}).get("Source", "")
+                    table_name = alias_map.get(source, source) if source else "UnknownTable"
+                if not table_name:
+                    table_name = "UnknownTable"
                 column_name = field.get("Property", "UnknownMeasure")
                 field_type_str = "measure"
             
@@ -314,7 +313,12 @@ class Filter:
                 field = field_container.get("Aggregation", {})
                 # Las agregaciones tienen estructura diferente
                 col_field = field.get("Expression", {}).get("Column", {})
-                table_name = col_field.get("Expression", {}).get("SourceRef", {}).get("Entity", "UnknownTable")
+                table_name = col_field.get("Expression", {}).get("SourceRef", {}).get("Entity", "")
+                if not table_name:
+                    source = col_field.get("Expression", {}).get("SourceRef", {}).get("Source", "")
+                    table_name = alias_map.get(source, source) if source else "UnknownTable"
+                if not table_name:
+                    table_name = "UnknownTable"
                 column_name = col_field.get("Property", "UnknownAggregation")
                 field_type_str = "aggregation"
             
@@ -940,6 +944,18 @@ class clsReport(FilterMixin):
         self.schema = data.get("$schema")
         self.themeCollection = data.get("themeCollection")
         self.filterConfig = data.get("filterConfig", {})
+        
+        # En legacy, los filtros de reporte están en la clave "filters" (puede ser JSON string)
+        if self.report_format == "legacy" and not self.filterConfig:
+            raw_filters = data.get("filters", [])
+            if isinstance(raw_filters, str):
+                try:
+                    raw_filters = json.loads(raw_filters)
+                except json.JSONDecodeError:
+                    raw_filters = []
+            if isinstance(raw_filters, list) and raw_filters:
+                self.filterConfig = {"filters": raw_filters}
+        
         self.objects = data.get("objects")
         self.publicCustomVisuals = data.get("publicCustomVisuals")
         self.resourcePackages = data.get("resourcePackages")
@@ -1012,9 +1028,6 @@ class clsReport(FilterMixin):
             # Extraer información básica de la section
             page_name = section.get('name', f'Page {section_index + 1}')
             display_name = section.get('displayName', page_name)
-            if section_index==16:
-                print(f"Debug: Procesando section {section_index} - name: {page_name}, displayName: {display_name}")
-            
             # Crear un directorio temporal para almacenar los datos de la página
             # Usar pages_path si existe, sino usar el root_path
             base_dir = self.pages_path if self.pages_path else self.root_path
@@ -1042,11 +1055,13 @@ class clsReport(FilterMixin):
                         visual_data = {}
                 else:
                     visual_data = visual_config
-
-
                 # Buscar mapeo de alias a entidad real en prototypeQuery.From
                 alias_map = {}
                 proto_query = visual_data.get('prototypeQuery')
+                if not proto_query:
+                    sv= visual_data.get("singleVisual")
+                    if sv and isinstance(sv, dict):
+                        proto_query = sv.get('prototypeQuery')
                 if proto_query and isinstance(proto_query, dict):
                     from_list = proto_query.get('From')
                     if isinstance(from_list, list):
@@ -1072,6 +1087,16 @@ class clsReport(FilterMixin):
 
                 sustituir_source_ref(visual_data)
 
+                # En legacy, los filtros del visual están en visualContainer.filters (JSON string separado del config)
+                visual_raw_filters = visual_container.get('filters', '[]')
+                if isinstance(visual_raw_filters, str):
+                    try:
+                        visual_raw_filters = json.loads(visual_raw_filters)
+                    except json.JSONDecodeError:
+                        visual_raw_filters = []
+                if isinstance(visual_raw_filters, list) and visual_raw_filters:
+                    visual_data['filterConfig'] = {"filters": visual_raw_filters}
+
                 # Obtener el nombre del visual o usar un nombre por defecto
                 visual_name = visual_data.get('name', f'visual_{visual_idx}')
 
@@ -1085,10 +1110,32 @@ class clsReport(FilterMixin):
                     json.dump(visual_data, f, indent=2)
             
             # Crear el page.json (sin visualContainers, ya que ahora están en archivos separados)
+            # En legacy, 'filters' puede ser un string JSON; parsearlo y convertirlo al formato filterConfig
+            raw_filters = section.get('filters', [])
+            if isinstance(raw_filters, str):
+                try:
+                    raw_filters = json.loads(raw_filters)
+                except json.JSONDecodeError:
+                    raw_filters = []
+            # Convertir al formato que Page espera: filterConfig = {"filters": [...]}
+            filter_config = {"filters": raw_filters} if isinstance(raw_filters, list) and raw_filters else {}
+            
+            # Extraer visibility desde el config de la section (es un string JSON en legacy)
+            page_visibility = section.get('visibility')
+            if page_visibility is None:
+                raw_config = section.get('config', '{}')
+                if isinstance(raw_config, str):
+                    try:
+                        config_parsed = json.loads(raw_config)
+                        page_visibility = config_parsed.get('visibility')
+                    except json.JSONDecodeError:
+                        pass
+            
             page_data = {
                 'name': page_name,
                 'displayName': display_name,
-                'filters': section.get('filters', []),
+                'filterConfig': filter_config,
+                'visibility': page_visibility,
                 'height': section.get('height'),
                 'width': section.get('width')
             }
@@ -1239,29 +1286,54 @@ class clsReport(FilterMixin):
             )
         """)
         
-        # Insertar reporte
-        connection.execute("""
-            INSERT INTO report (name, report_id, workspace_id, semantic_model_reference, schema, active_page_name, theme_collection, filter_config)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, [
-            report_name,
-            self.report_id,
-            self.workspace_id,
-            self.semantic_model_id,
-            self.schema,
-            self.activePageName,
-            json.dumps(self.themeCollection) if self.themeCollection else None,
-            json.dumps(self.filterConfig) if self.filterConfig else None
-        ])
-        
-        # Obtener report_id (usar report_id si existe, sino usar nombre)
-        report_id_result = connection.execute("SELECT id FROM report WHERE report_id = ?", [self.report_id]).fetchall()
-        report_id = report_id_result[0][0] if report_id_result else None
-        
+        # Buscar si el reporte ya existe (por report_id o por nombre)
+        report_id = None
+        if self.report_id:
+            report_id_result = connection.execute("SELECT id FROM report WHERE report_id = ?", [self.report_id]).fetchall()
+            report_id = report_id_result[0][0] if report_id_result else None
         if not report_id:
-            # Alternativa: buscar por nombre si report_id falla
             report_id_result = connection.execute("SELECT id FROM report WHERE name = ?", [report_name]).fetchall()
             report_id = report_id_result[0][0] if report_id_result else None
+        
+        if report_id:
+            # Ya existe: actualizar el registro principal
+            connection.execute("""
+                UPDATE report SET name = ?, report_id = ?, workspace_id = ?, semantic_model_reference = ?, 
+                       schema = ?, active_page_name = ?, theme_collection = ?, filter_config = ?, updated_at = now()
+                WHERE id = ?
+            """, [
+                report_name,
+                self.report_id,
+                self.workspace_id,
+                self.semantic_model_id,
+                self.schema,
+                self.activePageName,
+                json.dumps(self.themeCollection) if self.themeCollection else None,
+                json.dumps(self.filterConfig) if self.filterConfig else None,
+                report_id
+            ])
+        else:
+            # No existe: insertar nuevo
+            connection.execute("""
+                INSERT INTO report (name, report_id, workspace_id, semantic_model_reference, schema, active_page_name, theme_collection, filter_config)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, [
+                report_name,
+                self.report_id,
+                self.workspace_id,
+                self.semantic_model_id,
+                self.schema,
+                self.activePageName,
+                json.dumps(self.themeCollection) if self.themeCollection else None,
+                json.dumps(self.filterConfig) if self.filterConfig else None
+            ])
+            # Obtener el ID del registro recién insertado
+            if self.report_id:
+                report_id_result = connection.execute("SELECT id FROM report WHERE report_id = ?", [self.report_id]).fetchall()
+                report_id = report_id_result[0][0] if report_id_result else None
+            if not report_id:
+                report_id_result = connection.execute("SELECT id FROM report WHERE name = ?", [report_name]).fetchall()
+                report_id = report_id_result[0][0] if report_id_result else None
         
         if not report_id:
             print(f"⚠️ No se pudo obtener el ID del reporte {report_name}")
@@ -1269,7 +1341,8 @@ class clsReport(FilterMixin):
         
         # CREAR TODAS LAS TABLAS PRIMERO (antes de hacer DELETEs)
         
-        # Crear tabla report_page
+        # Crear tabla report_page (drop y recrear para incluir visibility)
+        connection.execute("DROP TABLE IF EXISTS report_page")
         connection.execute("""
             CREATE TABLE IF NOT EXISTS report_page (
                 id INTEGER PRIMARY KEY DEFAULT nextval('seq_report_page_id'),
@@ -1279,6 +1352,7 @@ class clsReport(FilterMixin):
                 height INTEGER,
                 width INTEGER,
                 display_option VARCHAR,
+                is_visible BOOLEAN DEFAULT TRUE,
                 created_at TIMESTAMP DEFAULT now()
             )
         """)
@@ -1394,16 +1468,19 @@ class clsReport(FilterMixin):
         
         # Insertar páginas e visuals
         for page in self.pages:
+            # visibility=1 significa oculta en Power BI, 0 o None = visible
+            is_visible = not (page.visibility == 1)
             connection.execute("""
-                INSERT INTO report_page (report_name, name, display_name, height, width, display_option)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO report_page (report_name, name, display_name, height, width, display_option, is_visible)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             """, [
                 report_name,
                 page.name,
                 page.displayName,
                 page.height,
                 page.width,
-                page.displayOption
+                page.displayOption,
+                is_visible
             ])
             
             # Insertar visuals de la página
