@@ -24,10 +24,290 @@ MODELS_PATH = Path(__file__).parent / "Modelos"
 
 class PowerBIModelServer:
     """Servidor MCP para gestión de modelos semánticos de Power BI"""
-    
-    def __init__(self, models_path: Path):
+
+    async def _powerbi_login_interactive(self) -> list[TextContent]:
+        """Inicia el login interactivo a Power BI y devuelve el link y el código para autenticarse."""
+        try:
+            from Importer.src.import_from_powerbi import start_device_flow_interactive, set_data_path
+            # Configurar la ruta de datos
+            set_data_path(str(self.data_path))
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error importando módulo de login: {e}")]
+
+        try:
+            result = start_device_flow_interactive()
+            
+            if not result["success"]:
+                return [TextContent(type="text", text=f"❌ Error iniciando login: {result['message']}")]
+            
+            if result.get("already_authenticated"):
+                return [TextContent(type="text", text=f"✅ {result['message']}")]
+            
+            # Formatear el mensaje para que sea más claro
+            message = result["message"]
+            return [TextContent(type="text", text=f"🔐 Para autenticarte en Power BI:\n\n{message}\n\n⚠️ IMPORTANTE: Abre el enlace en tu navegador e introduce el código. La autenticación se completará automáticamente en segundo plano.")]
+            
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error durante el login interactivo: {e}")]
+
+    async def _powerbi_check_auth_status(self) -> list[TextContent]:
+        """Verifica el estado de la autenticación de Power BI."""
+        try:
+            from Importer.src.import_from_powerbi import check_auth_status
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error importando módulo: {e}")]
+
+        try:
+            result = check_auth_status()
+            
+            if result["authenticated"]:
+                return [TextContent(type="text", text=f"✅ {result['message']}")]
+            else:
+                return [TextContent(type="text", text=f"⏳ {result['message']}")]
+            
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error verificando estado: {e}")]
+
+    async def _powerbi_logout(self) -> list[TextContent]:
+        """Cierra la sesión actual borrando el token de autenticación.
+        Esto permite conectarse a otro tenant.
+        Limpia tanto archivos como variables globales en memoria.
+        """
+        try:
+            # Importar la variable global para limpiarla
+            from Importer.src import import_from_powerbi
+            
+            files_deleted = []
+            
+            # Borrar archivo de token
+            token_file = Path(__file__).parent / "fabric_token_cache.json"
+            if token_file.exists():
+                token_file.unlink()
+                files_deleted.append("fabric_token_cache.json")
+            
+            # Borrar archivo de estado de autenticación
+            status_file = Path(__file__).parent / "data" / "powerbi_auth_status.json"
+            if status_file.exists():
+                status_file.unlink()
+                files_deleted.append("powerbi_auth_status.json")
+            
+            # Limpiar variable global _active_auth_flow
+            import_from_powerbi._active_auth_flow = {
+                "downloader": None, 
+                "flow": None, 
+                "message": None, 
+                "thread": None,
+                "status": None,
+                "app": None
+            }
+            
+            if files_deleted:
+                return [TextContent(type="text", text=f"✅ Sesión cerrada correctamente.\n\n📄 Archivos eliminados:\n• {chr(10).join(files_deleted)}\n\n💾 Estado en memoria limpiado.\n\nAhora puedes conectarte a otro tenant usando 'powerbi_login_interactive'.")]
+            else:
+                return [TextContent(type="text", text=f"ℹ️ No hay sesión activa. Se limpió cualquier estado residual en memoria.\n\nPuedes iniciar sesión en otro tenant con 'powerbi_login_interactive'.")]
+            
+        except Exception as e:
+            return [TextContent(type="text", text=f"❌ Error al cerrar sesión: {e}")]
+
+    async def _powerbi_list_workspaces(self) -> list[TextContent]:
+        """Lista todos los workspaces de Power BI disponibles."""
+        try:
+            from Importer.src.import_from_powerbi import powerbi_list_workspaces
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error importando módulo: {e}")]
+
+        try:
+            result = powerbi_list_workspaces()
+            
+            if not result["success"]:
+                return [TextContent(type="text", text=result["message"])]
+            
+            workspaces = result["workspaces"]
+            output = f"🏢 Workspaces disponibles ({len(workspaces)}):\n\n"
+            for ws in workspaces:
+                output += f"• {ws.get('displayName', ws.get('name', 'N/A'))}\n"
+                output += f"  ID: {ws['id']}\n\n"
+            
+            return [TextContent(type="text", text=output)]
+            
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error listando workspaces: {e}")]
+
+    async def _powerbi_list_reports(self, workspace_id: str) -> list[TextContent]:
+        """Lista reportes con 3 comportamientos:
+        1. Si está autenticado en Power BI → usa API
+        2. Si hay BD predeterminada → lista desde BD
+        3. Si no → informa al usuario
+        """
+        try:
+            from Importer.src.import_from_powerbi import check_auth_status, powerbi_list_reports
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error importando módulo: {e}")]
+
+        # 1. Verificar si hay autenticación Power BI
+        try:
+            auth_result = check_auth_status()
+            if auth_result.get("authenticated"):
+                # Usar API de Power BI
+                try:
+                    result = powerbi_list_reports(workspace_id)
+                    if not result["success"]:
+                        return [TextContent(type="text", text=result["message"])]
+                    
+                    reports = result["reports"]
+                    output = f"📊 Reportes en el workspace (desde Power BI API) ({len(reports)}):\n\n"
+                    for rep in reports:
+                        output += f"• {rep.get('displayName', rep.get('name', 'N/A'))}\n"
+                        output += f"  ID: {rep['id']}\n\n"
+                    
+                    return [TextContent(type="text", text=output)]
+                except Exception as e:
+                    return [TextContent(type="text", text=f"Error usando API: {e}")]
+        except Exception:
+            pass
+        
+        # 2. Si no está autenticado, intentar usar BD predeterminada
+        success, reports, error = self._get_reports_from_db()
+        if success:
+            output = f"📊 Reportes en el workspace (desde DuckDB) ({len(reports)}):\n\n"
+            output += f"📁 Base de datos: {self.default_db_path}\n\n"
+            for report_id, name, report_id_col, workspace_id_col in reports:
+                output += f"• {name}\n"
+                output += f"  ID: {report_id}\n\n"
+            return [TextContent(type="text", text=output)]
+        
+        # 3. Si no hay BD ni autenticación, mostrar mensaje de ayuda
+        return [TextContent(
+            type="text",
+            text=f"❌ No se puede listar reportes\n\n"
+                 f"Tienes 2 opciones:\n\n"
+                 f"1️⃣ **Autenticar en Power BI:**\n"
+                 f"   Usa 'powerbi_login_interactive' para iniciar la autenticación\n\n"
+                 f"2️⃣ **Usar una base de datos local:**\n"
+                 f"   Usa 'default_db' para seleccionar una base de datos DuckDB descargada\n"
+                 f"   BD actual: {self.default_db_path}\n\n"
+                 f"Error: {error}"
+        )]
+
+    async def _powerbi_list_semantic_models(self, workspace_id: str) -> list[TextContent]:
+        """Lista modelos semánticos con 3 comportamientos:
+        1. Si está autenticado en Power BI → usa API
+        2. Si hay BD predeterminada → lista desde BD
+        3. Si no → informa al usuario
+        """
+        try:
+            from Importer.src.import_from_powerbi import check_auth_status, powerbi_list_semantic_models
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error importando módulo: {e}")]
+
+        # 1. Verificar si hay autenticación Power BI
+        try:
+            auth_result = check_auth_status()
+            if auth_result.get("authenticated"):
+                # Usar API de Power BI
+                try:
+                    result = powerbi_list_semantic_models(workspace_id)
+                    if not result["success"]:
+                        return [TextContent(type="text", text=result["message"])]
+                    
+                    models = result["models"]
+                    output = f"📦 Modelos semánticos en el workspace (desde Power BI API) ({len(models)}):\n\n"
+                    for model in models:
+                        output += f"• {model.get('displayName', model.get('name', 'N/A'))}\n"
+                        output += f"  ID: {model['id']}\n\n"
+                    
+                    return [TextContent(type="text", text=output)]
+                except Exception as e:
+                    return [TextContent(type="text", text=f"Error usando API: {e}")]
+        except Exception:
+            pass
+        
+        # 2. Si no está autenticado, intentar usar BD predeterminada
+        success, models, error = self._get_semantic_models_from_db()
+        if success:
+            output = f"📦 Modelos semánticos en el workspace (desde DuckDB) ({len(models)}):\n\n"
+            output += f"📁 Base de datos: {self.default_db_path}\n\n"
+            for model_id, semantic_model_id, workspace_id_col, name in models:
+                output += f"• {name}\n"
+                output += f"  ID: {model_id}\n\n"
+            return [TextContent(type="text", text=output)]
+        
+        # 3. Si no hay BD ni autenticación, mostrar mensaje de ayuda
+        return [TextContent(
+            type="text",
+            text=f"❌ No se puede listar modelos semánticos\n\n"
+                 f"Tienes 2 opciones:\n\n"
+                 f"1️⃣ **Autenticar en Power BI:**\n"
+                 f"   Usa 'powerbi_login_interactive' para iniciar la autenticación\n\n"
+                 f"2️⃣ **Usar una base de datos local:**\n"
+                 f"   Usa 'default_db' para seleccionar una base de datos DuckDB descargada\n"
+                 f"   BD actual: {self.default_db_path}\n\n"
+                 f"Error: {error}"
+        )]
+
+    async def _powerbi_download_workspace(self, workspace_name: str, destination_path: str = None, db_name: str = "powerbi") -> list[TextContent]:
+        """Descarga un workspace completo de Power BI (modelos semánticos y reportes)."""
+        import os
+        import traceback
+        import logging
+        
+        # Usar data_path configurada si no se especifica destination_path
+        if destination_path is None:
+            destination_path = str(self.data_path)
+        
+        logger = logging.getLogger(__name__)
+        
+        try:
+            logger.info(f"\n{'='*60}")
+            logger.info(f"🚀 Iniciando descarga de workspace: {workspace_name}")
+            logger.info(f"📁 Directorio actual: {os.getcwd()}")
+            logger.info(f"📁 Destino: {os.path.abspath(destination_path)}")
+            logger.info(f"💾 BD: {db_name}")
+            logger.info(f"{'='*60}")
+            
+            from Importer.src.import_from_powerbi import PowerBIImporter, _active_auth_flow
+        except Exception as e:
+            error_msg = f"Error importando módulo: {e}\n{traceback.format_exc()}"
+            logger.error(error_msg)
+            return [TextContent(type="text", text=f"❌ {error_msg}")]
+
+        try:
+            # Obtener el downloader del flujo activo
+            if not _active_auth_flow.get("downloader"):
+                error_msg = "❌ No hay autenticación activa. Ejecuta 'powerbi_login_interactive' primero."
+                logger.error(error_msg)
+                return [TextContent(type="text", text=error_msg)]
+            
+            downloader = _active_auth_flow["downloader"]
+            logger.info(f"✅ Downloader obtenido")
+            logger.info(f"🔐 Token disponible: {bool(downloader.access_token)}")
+            
+            # Crear importer
+            logger.info(f"📦 Creando PowerBIImporter para workspace: {workspace_name}")
+            importer = PowerBIImporter(downloader, workspace_name=workspace_name)
+            
+            # Ejecutar importación
+            logger.info(f"⏳ Ejecutando import_from_powerbi...")
+            result = importer.import_from_powerbi(
+                destination_path=destination_path,
+                WorkspaceName=workspace_name,
+                db_name=db_name
+            )
+            
+            logger.info(f"✅ Importación completada")
+            return [TextContent(type="text", text=f"✅ Workspace '{workspace_name}' descargado e importado exitosamente\n\n📁 Archivos descargados en: {os.path.abspath(destination_path)}\n💾 BD metainformación: {db_name}.duckdb\n\n⚠️ Revisa los logs para detalles de la importación")]
+            
+        except Exception as e:
+            error_msg = f"❌ Error descargando workspace: {e}\n\n{traceback.format_exc()}"
+            logger.error(error_msg)
+            return [TextContent(type="text", text=f"{error_msg}\n\n💡 Verifica que:\n- El nombre del workspace sea correcto\n- Tengas permisos para acceder al workspace\n- La autenticación sea válida")]
+
+    def __init__(self, models_path: Path, data_path: str = "D:/mcpdata"):
         self.models_path = models_path
+        self.data_path = Path(data_path)  # Ruta configurable para datos, caché y BD
         self.server = Server("powerbi-semantic-model")
+        self.default_db_name = "demostracion"
+        self.default_db_path = self.data_path / "demostracion.duckdb"
         self._register_handlers()
     
     def _register_handlers(self):
@@ -50,13 +330,87 @@ class PowerBIModelServer:
                         },
                         "required": ["path"]
                     }
-                ),
+                ), Tool(
+                                        name="powerbi_login_interactive",
+                                        description="Inicia el login interactivo a Power BI (device code flow) y devuelve el link y el código para autenticarse. Es necesario completar este paso antes de importar modelos desde Power BI.",
+                                        inputSchema={
+                                            "type": "object",
+                                            "properties": {},
+                                        }
+                                    ),
                 Tool(
-                    name="list_semantic_models",
-                    description="Lista todos los modelos semánticos disponibles (.SemanticModel)",
+                    name="powerbi_check_auth_status",
+                    description="Verifica el estado de la autenticación de Power BI. Usa este comando para confirmar que el login se completó exitosamente.",
                     inputSchema={
                         "type": "object",
                         "properties": {},
+                    }
+                ),
+                Tool(
+                    name="powerbi_logout",
+                    description="Cierra la sesión actual y borra el token de autenticación. Necesario para conectarse a otro tenant.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {},
+                    }
+                ),
+                Tool(
+                    name="powerbi_list_workspaces",
+                    description="Lista todos los workspaces de Power BI disponibles para el usuario autenticado.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {},
+                    }
+                ),
+                Tool(
+                    name="powerbi_list_reports",
+                    description="Lista todos los reportes de un workspace específico de Power BI.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "workspace_id": {
+                                "type": "string",
+                                "description": "ID del workspace de Power BI"
+                            }
+                        },
+                        "required": ["workspace_id"]
+                    }
+                ),
+                Tool(
+                    name="powerbi_list_semantic_models",
+                    description="Lista todos los modelos semánticos de un workspace específico de Power BI.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "workspace_id": {
+                                "type": "string",
+                                "description": "ID del workspace de Power BI"
+                            }
+                        },
+                        "required": ["workspace_id"]
+                    }
+                ),
+                Tool(
+                    name="powerbi_download_workspace",
+                    description="Descarga un workspace completo de Power BI (todos los modelos semánticos y reportes) a la ruta configurada en el MCP.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "workspace_name": {
+                                "type": "string",
+                                "description": "Nombre del workspace a descargar"
+                            },
+                            "destination_path": {
+                                "type": "string",
+                                "description": "Ruta donde guardar los archivos descargados (default: ruta configurada en MCP, ej: D:/mcpdata)"
+                            },
+                            "db_name": {
+                                "type": "string",
+                                "description": "Nombre de la base de datos DuckDB para guardar metainformación (default: 'powerbi')",
+                                "default": "powerbi"
+                            }
+                        },
+                        "required": ["workspace_name"]
                     }
                 ),
                 Tool(
@@ -71,14 +425,6 @@ class PowerBIModelServer:
                             }
                         },
                         "required": ["model_name"]
-                    }
-                ),
-                Tool(
-                    name="list_reports",
-                    description="Lista todos los reportes disponibles (.Report)",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {},
                     }
                 ),
                 Tool(
@@ -249,6 +595,60 @@ class PowerBIModelServer:
                         "required": ["model_name"]
                     }
                 ),
+                Tool(
+                    name="analyze_model_usage_bd",
+                    description="Analiza uso del modelo usando DuckDB (report, report_column_used, report_measure_used)",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "model_name": {
+                                "type": "string",
+                                "description": "Nombre del modelo a analizar"
+                            },
+                            "db_path": {
+                                "type": "string",
+                                "description": "Ruta a la base DuckDB (default: la configurada con default_db)"
+                            },
+                            "semantic_model_id": {
+                                "type": "string",
+                                "description": "GUID del modelo semántico (si no está en el objeto)"
+                            }
+                        },
+                        "required": ["model_name"]
+                    }
+                ),
+                Tool(
+                    name="default_db",
+                    description="Establece la base de datos DuckDB por defecto (ruta y nombre)",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "db_path": {
+                                "type": "string",
+                                "description": "Ruta a la base DuckDB"
+                            },
+                            "db_name": {
+                                "type": "string",
+                                "description": "Nombre lógico de la base de datos"
+                            }
+                        },
+                        "required": ["db_path", "db_name"]
+                    }
+                ),
+                Tool(
+                    name="querydb",
+                    description="Ejecuta una consulta SQL en la base de datos DuckDB predeterminada",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "Consulta SQL a ejecutar en DuckDB"
+                            }
+                        },
+                        "required": ["query"]
+                    }
+                ),
             ]
         
         @self.server.call_tool()
@@ -258,14 +658,33 @@ class PowerBIModelServer:
             if name == "set_models_path":
                 return await self._set_models_path(arguments["path"])
 
-            if name == "list_semantic_models":
-                return await self._list_semantic_models()
+            if name == "powerbi_login_interactive":
+                return await self._powerbi_login_interactive()
+            
+            if name == "powerbi_check_auth_status":
+                return await self._powerbi_check_auth_status()
+            
+            if name == "powerbi_logout":
+                return await self._powerbi_logout()
+            
+            if name == "powerbi_list_workspaces":
+                return await self._powerbi_list_workspaces()
+            
+            if name == "powerbi_list_reports":
+                return await self._powerbi_list_reports(arguments["workspace_id"])
+            
+            if name == "powerbi_list_semantic_models":
+                return await self._powerbi_list_semantic_models(arguments["workspace_id"])
+            
+            if name == "powerbi_download_workspace":
+                return await self._powerbi_download_workspace(
+                    arguments["workspace_name"],
+                    arguments.get("destination_path", "data"),
+                    arguments.get("db_name", "powerbi")
+                )
             
             elif name == "get_model_info":
                 return await self._get_model_info(arguments["model_name"])
-            
-            elif name == "list_reports":
-                return await self._list_reports()
             
             elif name == "analyze_report":
                 return await self._analyze_report(arguments["report_name"])
@@ -314,21 +733,70 @@ class PowerBIModelServer:
             
             elif name == "analyze_model_usage":
                 return await self._analyze_model_usage(arguments["model_name"])
+
+            elif name == "analyze_model_usage_bd":
+                return await self._analyze_model_usage_bd(
+                    arguments["model_name"],
+                    arguments.get("db_path"),
+                    arguments.get("semantic_model_id")
+                )
+
+            elif name == "default_db":
+                return await self._default_db(
+                    arguments["db_path"],
+                    arguments["db_name"]
+                )
+            
+            elif name == "querydb":
+                return await self._query_db(arguments["query"])
             
             else:
                 raise ValueError(f"Unknown tool: {name}")
     
-    async def _list_semantic_models(self) -> list[TextContent]:
-        """Lista todos los modelos semánticos"""
-        models = [d.name for d in self.models_path.iterdir() 
-                 if d.is_dir() and d.name.endswith('.SemanticModel')]
+    def _get_workspace_path(self) -> Path:
+        """Obtiene la ruta del directorio de workspace basado en default_db_name.
         
-        result = f"Modelos semánticos encontrados ({len(models)}):\n\n"
-        for model in sorted(models):
-            result += f"- {model}\n"
+        Retorna: self.data_path / self.default_db_name
+        Ej: D:/mcpdata/demostracion para default_db_name = "demostracion"
+        """
+        return self.data_path / self.default_db_name
+    
+    def _get_reports_from_db(self) -> tuple[bool, list, str]:
+        """Intenta consultar reportes desde la BD predeterminada.
         
-        return [TextContent(type="text", text=result)]
-
+        Returns:
+            (success: bool, reports: list, message: str)
+        """
+        if not self.default_db_path.exists():
+            return False, [], f"BD no encontrada: {self.default_db_path}"
+        
+        try:
+            import duckdb
+            connection = duckdb.connect(str(self.default_db_path), read_only=True)
+            reports = connection.execute("SELECT id, name, report_id, workspace_id FROM report ORDER BY name").fetchall()
+            connection.close()
+            return True, reports, ""
+        except Exception as e:
+            return False, [], str(e)
+    
+    def _get_semantic_models_from_db(self) -> tuple[bool, list, str]:
+        """Intenta consultar modelos semánticos desde la BD predeterminada.
+        
+        Returns:
+            (success: bool, models: list, message: str)
+        """
+        if not self.default_db_path.exists():
+            return False, [], f"BD no encontrada: {self.default_db_path}"
+        
+        try:
+            import duckdb
+            connection = duckdb.connect(str(self.default_db_path), read_only=True)
+            models = connection.execute("SELECT id, semantic_model_id, workspace_id, name FROM semantic_model ORDER BY name").fetchall()
+            connection.close()
+            return True, models, ""
+        except Exception as e:
+            return False, [], str(e)
+    
     async def _set_models_path(self, path_str: str) -> list[TextContent]:
         """Actualiza el directorio base de modelos y reportes."""
         new_path = Path(path_str)
@@ -342,11 +810,12 @@ class PowerBIModelServer:
         return [TextContent(type="text", text=f"✅ Directorio de modelos actualizado a: {self.models_path}")]
     
     async def _get_model_info(self, model_name: str) -> list[TextContent]:
-        """Obtiene información de un modelo"""
-        model_path = self.models_path / model_name
+        """Obtiene información de un modelo del workspace actual"""
+        workspace_path = self._get_workspace_path()
+        model_path = workspace_path / model_name
         
         if not model_path.exists():
-            return [TextContent(type="text", text=f"Error: Modelo '{model_name}' no encontrado")]
+            return [TextContent(type="text", text=f"Error: Modelo '{model_name}' no encontrado en {workspace_path}")]
         
         # Cargar modelo
         model = SemanticModel(str(model_path))
@@ -374,23 +843,13 @@ class PowerBIModelServer:
         
         return [TextContent(type="text", text=result)]
     
-    async def _list_reports(self) -> list[TextContent]:
-        """Lista todos los reportes"""
-        reports = [d.name for d in self.models_path.iterdir() 
-                  if d.is_dir() and d.name.endswith('.Report')]
-        
-        result = f"Reportes encontrados ({len(reports)}):\n\n"
-        for report in sorted(reports):
-            result += f"- {report}\n"
-        
-        return [TextContent(type="text", text=result)]
-    
     async def _analyze_report(self, report_name: str) -> list[TextContent]:
-        """Analiza un reporte"""
-        report_path = self.models_path / report_name
+        """Analiza un reporte del workspace actual"""
+        workspace_path = self._get_workspace_path()
+        report_path = workspace_path / report_name
         
         if not report_path.exists():
-            return [TextContent(type="text", text=f"Error: Reporte '{report_name}' no encontrado")]
+            return [TextContent(type="text", text=f"Error: Reporte '{report_name}' no encontrado en {workspace_path}")]
         
         # Parsear reporte
         report = clsReport(str(report_path))
@@ -585,8 +1044,8 @@ class PowerBIModelServer:
         # Crear especificaciones de tablas
         table_specs = [(table, search_direction) for table in tables]
         
-        # Crear submodelo
-        subset = model.create_subset_model(
+        # Crear submodelo (legacy: selección manual de tablas)
+        subset = model.create_subset_model_legacy(
             table_specs=table_specs,
             subset_name=target_model,
             recursive=recursive,
@@ -618,81 +1077,46 @@ class PowerBIModelServer:
         include_related: bool,
         copy_reports: bool
     ) -> list[TextContent]:
-        """Crea modelo basado en reportes"""
+        """Crea modelo basado en reportes usando datos de DuckDB.
+
+        Utiliza ``create_subset_model_from_db`` que consulta las tablas
+        ``report_column_used``, ``report_measure_used`` y
+        ``semantic_model_measure_dependencies`` para determinar qué tablas,
+        columnas, medidas y relaciones necesita el submodelo.
+        """
         
         source_path = self.models_path / source_model
         if not source_path.exists():
             return [TextContent(type="text", text=f"Error: Modelo fuente '{source_model}' no encontrado")]
         
-        # Si no se especifican reportes, usar todos
-        if not reports:
-            reports = [d.name for d in self.models_path.iterdir() 
-                      if d.is_dir() and d.name.endswith('.Report')]
-        
-        # Analizar reportes
-        all_columns = defaultdict(set)
-        all_measures = defaultdict(set)
-        for report_name in reports:
-            report_path = self.models_path / report_name
-            if not report_path.exists():
-                continue
-            
-            report_obj = clsReport(str(report_path))
-            columns_refs = report_obj.get_all_columns_used()
-            measures_refs = report_obj.get_all_measures_used()
-            
-            for table, fields in columns_refs.items():
-                all_columns[table].update(fields)
-            for table, fields in measures_refs.items():
-                all_measures[table].update(fields)
-        
+        db_path = str(self.default_db_path)
+
         # Cargar modelo fuente
         model = SemanticModel(str(source_path))
         model.load_from_directory(source_path)
         
-        # Separar columnas y medidas por tabla
-        element_specs = {}
-        all_tables = set(list(all_columns.keys()) + list(all_measures.keys()))
-        
-        for table in all_tables:
-            original_table = next((t for t in model.tables if t.name == table), None)
-            if not original_table:
-                continue
-            
-            columns_list = sorted(list(all_columns.get(table, set())))
-            measures_list = sorted(list(all_measures.get(table, set())))
-            
-            element_specs[table] = TableElementSpec(
-                columns=columns_list if columns_list else None,
-                measures=measures_list if measures_list else None,
-                mode='include'
-            )
-        
-        # Crear submodelo
-        subset = model.create_subset_model(
-            table_specs=list(all_tables),
+        # Crear submodelo desde la base de datos
+        subset = model.create_subset_model_from_db(
+            db_path=db_path,
             subset_name=target_model,
-            recursive=include_related,
-            max_depth=0 if not include_related else 3,
-            table_elements=element_specs
         )
         
         # Guardar
         target_path = self.models_path / target_model
         subset.save_to_directory(target_path)
 
-        # Crear pbip + report vacío por defecto
-        await self._scaffold_empty_report_and_pbip(target_model)
-
         # Si se solicita, copiar páginas de los reportes origen, acumulando
         if copy_reports:
+            if not reports:
+                reports = [d.name for d in self.models_path.iterdir()
+                          if d.is_dir() and d.name.endswith('.Report')]
             await self._copy_and_merge_report_pages(
                 source_reports=reports,
                 target_report_name=self._derive_report_name_from_model(target_model)
             )
         
         result = f"✅ Modelo optimizado creado: {target_model}\n\n"
-        result += f"Basado en {len(reports)} reportes\n"
+        result += f"Basado en datos de DuckDB ({db_path})\n"
         result += f"Tablas: {len(subset.tables)}\n"
         result += f"Relaciones: {len(subset.relationships)}\n\n"
         
@@ -710,123 +1134,7 @@ class PowerBIModelServer:
 
     async def _scaffold_empty_report_and_pbip(self, model_name: str) -> None:
         """Crea un .pbip y un .Report vacío enlazado al modelo."""
-        base = model_name.replace('.SemanticModel', '')
-        report_dir = self.models_path / f"{base}.Report"
-        report_dir.mkdir(parents=True, exist_ok=True)
-
-        # .platform (metadata del report)
-        platform_path = report_dir / ".platform"
-        platform_obj = {
-            "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
-            "metadata": {
-                "type": "Report",
-                "displayName": base
-            },
-            "config": {
-                "version": "2.0",
-                "logicalId": str(uuid.uuid4())
-            }
-        }
-        platform_path.write_text(json.dumps(platform_obj, indent=2), encoding="utf-8")
-
-        # definition.pbir (link al modelo)
-        pbir_path = report_dir / "definition.pbir"
-        pbir_obj = {
-            "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definitionProperties/2.0.0/schema.json",
-            "version": "4.0",
-            "datasetReference": {
-                "byPath": {
-                    "path": f"../{model_name}"
-                }
-            }
-        }
-        pbir_path.write_text(json.dumps(pbir_obj, indent=2), encoding="utf-8")
-
-        # Estructura básica de report
-        definition_dir = report_dir / "definition"
-        pages_dir = definition_dir / "pages"
-        static_dir = report_dir / "StaticResources" / "SharedResources"
-        definition_dir.mkdir(parents=True, exist_ok=True)
-        pages_dir.mkdir(parents=True, exist_ok=True)
-        static_dir.mkdir(parents=True, exist_ok=True)
-
-        report_json = {
-            "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/report/3.0.0/schema.json",
-            "themeCollection": {
-                "baseTheme": {
-                    "name": "CY25SU11",
-                    "reportVersionAtImport": {
-                        "visual": "2.4.0",
-                        "report": "3.0.0",
-                        "page": "2.3.0"
-                    },
-                    "type": "SharedResources"
-                }
-            },
-            "resourcePackages": [
-                {
-                    "name": "SharedResources",
-                    "type": "SharedResources",
-                    "items": [
-                        {
-                            "name": "CY25SU11",
-                            "path": "BaseThemes/CY25SU11.json",
-                            "type": "BaseTheme"
-                        }
-                    ]
-                }
-            ],
-            "settings": {
-                "useStylableVisualContainerHeader": True,
-                "exportDataMode": "AllowSummarized",
-                "defaultDrillFilterOtherVisuals": True,
-                "allowChangeFilterTypes": True,
-                "useEnhancedTooltips": True,
-                "useDefaultAggregateDisplayName": True
-            }
-        }
-        (definition_dir / "report.json").write_text(json.dumps(report_json, indent=2), encoding="utf-8")
-        
-        version_json = {
-            "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/versionMetadata/1.0.0/schema.json",
-            "version": "2.0.0"
-        }
-        (definition_dir / "version.json").write_text(json.dumps(version_json, indent=2), encoding="utf-8")
-        
-        # Crear pages.json con una página vacía
-        page_id = str(uuid.uuid4()).replace('-', '')[:20]  # ID de 20 caracteres
-        pages_json = {
-            "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/pagesMetadata/1.0.0/schema.json",
-            "pageOrder": [page_id],
-            "activePageName": page_id
-        }
-        (pages_dir / "pages.json").write_text(json.dumps(pages_json, indent=2), encoding="utf-8")
-        
-        # Crear directorio de página y archivo page.json
-        page_folder = pages_dir / page_id
-        page_folder.mkdir(parents=True, exist_ok=True)
-        
-        page_json = {
-            "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/page/2.0.0/schema.json",
-            "name": page_id,
-            "displayName": "Página 1",
-            "displayOption": "FitToPage",
-            "height": 720,
-            "width": 1280
-        }
-        (page_folder / "page.json").write_text(json.dumps(page_json, indent=2), encoding="utf-8")
-
-        # Crear .pbip que apunte al report
-        pbip_path = self.models_path / f"{base}.pbip"
-        pbip_obj = {
-            "$schema": "https://developer.microsoft.com/json-schemas/fabric/pbip/pbipProperties/1.0.0/schema.json",
-            "version": "1.0",
-            "artifacts": [
-                {"report": {"path": f"{base}.Report"}}
-            ],
-            "settings": {"enableAutoRecovery": True}
-        }
-        pbip_path.write_text(json.dumps(pbip_obj, indent=2), encoding="utf-8")
+        SemanticModel.scaffold_pbip_and_report(self.models_path, model_name)
 
     async def _copy_and_merge_report_pages(self, source_reports: List[str], target_report_name: str) -> None:
         """Copia páginas de uno o varios reports origen y las acumula en el report destino.
@@ -990,6 +1298,164 @@ class PowerBIModelServer:
             result = f"Error: Modelo '{model_name}' no encontrado"
         
         return [TextContent(type="text", text=result)]
+
+    async def _analyze_model_usage_bd(
+        self,
+        model_name: str,
+        db_path: Optional[str],
+        semantic_model_id: Optional[str] = None
+    ) -> list[TextContent]:
+        """Analiza uso del modelo en reportes usando DuckDB."""
+        model_path = self.models_path / model_name
+
+        if not model_path.exists():
+            return [TextContent(type="text", text=f"Error: Modelo '{model_name}' no encontrado")]
+
+        model = SemanticModel(str(model_path), semantic_model_id=semantic_model_id)
+        model.load_from_directory(model_path)
+        if semantic_model_id:
+            model.semantic_model_id = semantic_model_id
+
+        if not model.semantic_model_id:
+            return [TextContent(
+                type="text",
+                text=(
+                    "Error: semantic_model_id no definido. "
+                    "Proporciona 'semantic_model_id' o asegúrate de que el modelo lo tenga cargado."
+                )
+            )]
+
+        if not db_path:
+            db_path = str(self.default_db_path)
+
+        try:
+            import duckdb
+            connection = duckdb.connect(db_path)
+        except Exception as e:
+            return [TextContent(type="text", text=f"Error abriendo DuckDB: {e}")]
+
+        try:
+            model.load_dependencies_from_db(connection)
+        finally:
+            try:
+                connection.close()
+            except Exception:
+                pass
+
+        used_tables = set(model.usage_by_table.keys())
+        total_tables = len(model.tables)
+        unused_tables = [t.name for t in model.tables if t.name not in used_tables]
+
+        result = f"=== Análisis de Uso (DuckDB): {model_name} ===\n\n"
+        result += f"DB: {db_path}\n"
+        result += f"Reportes relacionados: {len(model.report_usage)}\n"
+        result += f"Tablas usadas: {len(used_tables)}\n"
+        result += f"Tablas NO usadas: {max(total_tables - len(used_tables), 0)}\n\n"
+
+        if model.report_usage:
+            result += "### Reportes:\n"
+            for report in sorted(model.report_usage, key=lambda r: r["report_name"]):
+                result += (
+                    f"- {report['report_name']}: "
+                    f"{report['total_column_usage']} columnas, "
+                    f"{report['total_measure_usage']} medidas\n"
+                )
+
+        if used_tables:
+            result += "\n### Tablas Usadas:\n"
+            for table_name in sorted(used_tables):
+                table_entry = model.usage_by_table.get(table_name, {})
+                columns_count = sum(table_entry.get("columns", {}).values())
+                measures_count = sum(table_entry.get("measures", {}).values())
+                reports_count = len(table_entry.get("reports", []))
+                result += (
+                    f"- {table_name}: {columns_count} columnas, "
+                    f"{measures_count} medidas, {reports_count} reportes\n"
+                )
+
+        if unused_tables:
+            result += f"\n### Tablas NO Usadas ({len(unused_tables)}):\n"
+            for table in sorted(unused_tables):
+                result += f"- {table}\n"
+
+        return [TextContent(type="text", text=result)]
+
+    async def _default_db(self, db_path: str, db_name: str) -> list[TextContent]:
+        """Actualiza la base DuckDB por defecto usada por el servidor."""
+        new_path = Path(db_path)
+        if not new_path.is_absolute():
+            new_path = (Path.cwd() / new_path).resolve()
+
+        self.default_db_path = new_path
+        self.default_db_name = db_name
+
+        return [TextContent(
+            type="text",
+            text=(
+                f"✅ Base DuckDB por defecto actualizada:\n"
+                f"- Nombre: {self.default_db_name}\n"
+                f"- Ruta: {self.default_db_path}"
+            )
+        )]
+    
+    async def _query_db(self, query: str) -> list[TextContent]:
+        """Ejecuta una consulta SQL en la BD DuckDB predeterminada.
+        
+        Args:
+            query: Consulta SQL a ejecutar
+            
+        Returns:
+            Resultados de la consulta en formato texto
+        """
+        if not self.default_db_path.exists():
+            return [TextContent(
+                type="text",
+                text=f"❌ Base de datos no encontrada: {self.default_db_path}\n\n"
+                     f"Usa 'default_db' para configurar una base de datos válida."
+            )]
+        
+        try:
+            import duckdb
+            connection = duckdb.connect(str(self.default_db_path), read_only=True)
+            
+            # Ejecutar la consulta
+            result = connection.execute(query).fetchall()
+            columns = [desc[0] for desc in connection.description] if connection.description else []
+            
+            connection.close()
+            
+            # Formatear resultados
+            if not result:
+                return [TextContent(
+                    type="text",
+                    text=f"✅ Consulta ejecutada correctamente.\n\n"
+                         f"No se devolvieron resultados."
+                )]
+            
+            # Crear tabla con resultados
+            output = f"✅ Consulta ejecutada correctamente.\n\n"
+            output += f"📊 Resultados ({len(result)} filas):\n\n"
+            
+            # Encabezados
+            if columns:
+                output += "| " + " | ".join(columns) + " |\n"
+                output += "|" + "|".join([" --- " for _ in columns]) + "|\n"
+                
+                # Filas
+                for row in result:
+                    output += "| " + " | ".join(str(val) for val in row) + " |\n"
+            else:
+                # Si no hay columnas conocidas, mostrar como JSON
+                for row in result:
+                    output += str(row) + "\n"
+            
+            return [TextContent(type="text", text=output)]
+            
+        except Exception as e:
+            return [TextContent(
+                type="text",
+                text=f"❌ Error ejecutando consulta:\n\n{str(e)}"
+            )]
     
     async def run(self):
         """Ejecuta el servidor MCP"""

@@ -25,7 +25,10 @@ class Visual:
         self.position = {}
         self.columns_used = []
         self.measures_used = []
-        
+        self.filterConfig = None
+        self.filters: List[Filter] = []
+        self.entity_alias_map = {}  # Nuevo: mapeo alias->entidad real
+
         try:
             with open(self.visual_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
@@ -35,7 +38,20 @@ class Visual:
 
         self.name = data.get("name")
         self.visualType = data.get("visual", {}).get("visualType")
-   
+
+        # Guardar mapeo de alias a entidad real si existe prototypeQuery.From
+        proto_query = data.get('prototypeQuery')
+        if not proto_query:
+            sv= data.get("singleVisual")
+            if sv and isinstance(sv, dict):
+                proto_query = sv.get('prototypeQuery')
+        if proto_query and isinstance(proto_query, dict):
+            from_list = proto_query.get('From')
+            if isinstance(from_list, list):
+                for entry in from_list:
+                    if isinstance(entry, dict) and 'Name' in entry and 'Entity' in entry:
+                        self.entity_alias_map[entry['Name']] = entry['Entity']
+
         # Posición
         pos = data.get("position", {})
         self.position = {
@@ -61,13 +77,14 @@ class Visual:
                 nav_expr = props["navigationSection"].get("expr", {}).get("Literal", {}).get("Value", "")
                 self.navigationTarget = nav_expr.strip("'")
 
-        # Campos usados en queryState
-        projections = data.get("visual", {}).get("query", {}).get("queryState", {}).get("Values", {}).get("projections", [])
-        for proj in projections:
-            self._extraer_campo(proj.get("field", {}))
-        projections = data.get("visual", {}).get("query", {}).get("queryState", {}).get("Values", {}).get("Indicator", {}).get("projections", [])
-        for proj in projections:
-            self._extraer_campo(proj.get("field", {}))
+        # Campos usados en queryState (recorrer todos los posibles apartados)
+        query_state = data.get("visual", {}).get("query", {}).get("queryState", {})
+        if isinstance(query_state, dict):
+            for key, value in query_state.items():
+                if isinstance(value, dict) and "projections" in value:
+                    projections = value.get("projections", [])
+                    for proj in projections:
+                        self._extraer_campo(proj.get("field", {}), proj.get("queryRef"))
 
         # Campos usados en sortDefinition
         sort_fields = data.get("visual", {}).get("query", {}).get("sortDefinition", {}).get("sort", [])
@@ -78,33 +95,59 @@ class Visual:
         objects = data.get("visual", {}).get("objects", {})
         self._buscar_campos_en_objetos(objects)
         self._buscar_campos_en_objetos(data)
+        
+        # Filtros a nivel de visual
+        self.filterConfig = data.get("filterConfig", {})
+        if self.filterConfig:
+            self.filters = Filter.extract_from_config(
+                self.filterConfig,
+                filter_type="visual",
+                visual_name=self.name
+            )
 
-    def _extraer_campo(self, field):
-        """Extrae campos de tipo Column o Measure."""
+    def _extraer_campo(self, field, query_ref=None):
+        """Extrae campos de tipo Column o Measure, usando queryRef si está presente y distinguiendo tipo. Sustituye alias por entidad real si es necesario."""
+        # Si hay query_ref, usarlo y distinguir tipo
+        if query_ref:
+            # Resolver alias en queryRef (formato típico: "alias.Property")
+            resolved_ref = query_ref
+            if '.' in query_ref:
+                alias_part, prop_part = query_ref.split('.', 1)
+                if alias_part in self.entity_alias_map:
+                    resolved_ref = f"{self.entity_alias_map[alias_part]}.{prop_part}"
+            if "Measure" in field:
+                self.measures_used.append(resolved_ref)
+                return
+            elif "Column" in field:
+                self.columns_used.append(resolved_ref)
+                return
+        # Si no hay query_ref, parseo tradicional
         if "Column" in field:
             ref = field["Column"]
-            try:
-                entity = ref.get("Expression", {}).get("SourceRef", {}).get("Entity")
-            except Exception:
-                entity = ref
-            try:
-                prop = ref.get("Property")
-            except Exception:
-                prop = ref
-            if entity and prop:
-                self.columns_used.append(f"{entity}.{prop}")
+            table_name = ref.get("Table") or ref.get("Entity")
+            if not table_name:
+                table_name = ref.get("Expression", {}).get("SourceRef", {}).get("Entity")
+                if not table_name:
+                    table_name = ref.get("Expression", {}).get("SourceRef", {}).get("Source")
+            # Sustituir alias por entidad real si corresponde
+            if table_name and table_name in self.entity_alias_map:
+                table_name = self.entity_alias_map[table_name]
+            prop = ref.get("Property")
+            if prop:
+                self.columns_used.append(f"{table_name}.{prop}" if table_name else f"{prop}")
         elif "Measure" in field:
             ref = field["Measure"]
-            try:
-                entity = ref.get("Expression", {}).get("SourceRef", {}).get("Entity")
-            except Exception:
-                entity = ref
-            try:
-                prop = ref.get("Property")
-            except Exception:
-                prop = ref
-            if entity and prop:
-                self.measures_used.append(f"{entity}.{prop}")
+            table_name = ref.get("Table") or ref.get("Entity")
+            if not table_name:
+                table_name = ref.get("Expression", {}).get("SourceRef", {}).get("Entity")
+                if not table_name:
+                    table_name = ref.get("Expression", {}).get("SourceRef", {}).get("Source")
+            # Sustituir alias por entidad real si corresponde
+            if table_name and table_name in self.entity_alias_map:
+                table_name = self.entity_alias_map[table_name]
+            prop = ref.get("Property")
+            if prop:
+                self.measures_used.append(f"{table_name}.{prop}" if table_name else f"{prop}")
 
     def _buscar_campos_en_objetos(self, obj):
         """Busca recursivamente campos en objetos visuales."""
@@ -134,8 +177,21 @@ class FilterMixin:
 
         for f in filters:
             name = f.get("name", "Unnamed Filter")
-            field = f.get("field", {}).get("Column", {})
-            entity = field.get("Expression", {}).get("SourceRef", {}).get("Entity", "UnknownEntity")
+            # PBIR usa "field", legacy usa "expression"
+            field = f.get("field", f.get("expression", {})).get("Column", {})
+            entity = field.get("Expression", {}).get("SourceRef", {}).get("Entity", "")
+            if not entity:
+                # Resolver alias desde filter.From
+                source = field.get("Expression", {}).get("SourceRef", {}).get("Source", "")
+                filter_from = f.get("filter", {}).get("From", [])
+                alias_map = {}
+                if isinstance(filter_from, list):
+                    for entry in filter_from:
+                        if isinstance(entry, dict) and 'Name' in entry and 'Entity' in entry:
+                            alias_map[entry['Name']] = entry['Entity']
+                entity = alias_map.get(source, source) if source else "UnknownEntity"
+            if not entity:
+                entity = "UnknownEntity"
             column = field.get("Property", "UnknownColumn")
             filter_obj = f.get("filter", {})
             where_clauses = filter_obj.get("Where", [])
@@ -169,6 +225,157 @@ class FilterMixin:
         return "Condición de filtro no reconocida o no soportada."
 
 
+class Filter:
+    """Representa un filtro con información de su origen (report, page o visual) y columnas involucradas."""
+
+    def __init__(self, name: str, filter_type: str, table_name: str, column_name: str, 
+                 page_name: str = None, visual_name: str = None, description: str = None):
+        """
+        Args:
+            name: Nombre del filtro
+            filter_type: Tipo de filtro ('report', 'page', o 'visual')
+            table_name: Nombre de la tabla del campo filtrado
+            column_name: Nombre de la columna filtrada
+            page_name: Nombre de la página (si es page o visual filter)
+            visual_name: Nombre del visual (si es visual filter)
+            description: Descripción legible del filtro
+        """
+        self.name = name
+        self.filter_type = filter_type
+        self.table_name = table_name
+        self.column_name = column_name
+        self.page_name = page_name
+        self.visual_name = visual_name
+        self.description = description
+
+    @staticmethod
+    def extract_from_config(filter_config: Dict[str, Any], filter_type: str = "report",
+                           page_name: str = None, visual_name: str = None) -> List['Filter']:
+        """
+        Extrae una lista de Filter objects desde una configuración de filtros.
+        
+        Args:
+            filter_config: Configuración JSON de filtros
+            filter_type: Tipo de filtro ('report', 'page', o 'visual')
+            page_name: Nombre de la página (si es page o visual filter)
+            visual_name: Nombre del visual (si es visual filter)
+        
+        Returns:
+            Lista de objetos Filter
+        """
+        filters = []
+        filter_list = filter_config.get("filters", []) if filter_config else []
+
+        for f in filter_list:
+            name = f.get("name", "Unnamed Filter")
+            # PBIR usa "field", legacy usa "expression"
+            field_container = f.get("field", f.get("expression", {}))
+            
+            # Intentar extraer información de Column, Measure o Aggregation
+            table_name = "UnknownTable"
+            column_name = "UnknownField"
+            field_type_str = "field"
+            
+            # Construir alias_map desde filter.From si existe
+            filter_from = f.get("filter", {}).get("From", [])
+            alias_map = {}
+            if isinstance(filter_from, list):
+                for entry in filter_from:
+                    if isinstance(entry, dict) and 'Name' in entry and 'Entity' in entry:
+                        alias_map[entry['Name']] = entry['Entity']
+            
+            # Caso 1: Columna ordinaria
+            if "Column" in field_container:
+                field = field_container.get("Column", {})
+                table_name = field.get("Expression", {}).get("SourceRef", {}).get("Entity", "")
+                if not table_name:
+                    source = field.get("Expression", {}).get("SourceRef", {}).get("Source", "")
+                    table_name = alias_map.get(source, source) if source else "UnknownTable"
+                if not table_name:
+                    table_name = "UnknownTable"
+                column_name = field.get("Property", "UnknownColumn")
+                field_type_str = "column"
+            
+            # Caso 2: Medida
+            elif "Measure" in field_container:
+                field = field_container.get("Measure", {})
+                table_name = field.get("Expression", {}).get("SourceRef", {}).get("Entity", "")
+                if not table_name:
+                    source = field.get("Expression", {}).get("SourceRef", {}).get("Source", "")
+                    table_name = alias_map.get(source, source) if source else "UnknownTable"
+                if not table_name:
+                    table_name = "UnknownTable"
+                column_name = field.get("Property", "UnknownMeasure")
+                field_type_str = "measure"
+            
+            # Caso 3: Agregación
+            elif "Aggregation" in field_container:
+                field = field_container.get("Aggregation", {})
+                # Las agregaciones tienen estructura diferente
+                col_field = field.get("Expression", {}).get("Column", {})
+                table_name = col_field.get("Expression", {}).get("SourceRef", {}).get("Entity", "")
+                if not table_name:
+                    source = col_field.get("Expression", {}).get("SourceRef", {}).get("Source", "")
+                    table_name = alias_map.get(source, source) if source else "UnknownTable"
+                if not table_name:
+                    table_name = "UnknownTable"
+                column_name = col_field.get("Property", "UnknownAggregation")
+                field_type_str = "aggregation"
+            
+            # Generar descripción basada en condiciones
+            filter_config_obj = f.get("filter", {})
+            where_clauses = filter_config_obj.get("Where", [])
+            descriptions = []
+            
+            for clause in where_clauses:
+                condition = clause.get("Condition", {})
+                try:
+                    if "Not" in condition:
+                        desc = f"Se excluyen valores en '{table_name}'.'{column_name}'"
+                    elif "In" in condition:
+                        desc = f"Se incluyen valores en '{table_name}'.'{column_name}'"
+                    elif "Equals" in condition:
+                        desc = f"Es igual a en '{table_name}'.'{column_name}'"
+                    elif "Comparison" in condition:
+                        comp = condition.get("Comparison", {})
+                        comp_kind = comp.get("ComparisonKind", -1)
+                        comparison_types = {
+                            0: "igual a",
+                            1: "mayor que",
+                            2: "menor que",
+                            3: "mayor o igual que",
+                            4: "menor o igual que",
+                            5: "no igual a"
+                        }
+                        comp_str = comparison_types.get(comp_kind, "comparación desconocida")
+                        desc = f"Filtro de {field_type_str} where '{column_name}' es {comp_str}"
+                    else:
+                        desc = f"Condición desconocida en '{table_name}'.'{column_name}'"
+                    descriptions.append(desc)
+                except Exception as e:
+                    descriptions.append(f"Error al procesar condición en '{table_name}'.'{column_name}': {str(e)}")
+            
+            description = "; ".join(descriptions) if descriptions else None
+            
+            # Solo crear Filter si hay información válida
+            if table_name != "UnknownTable" or column_name != "UnknownField":
+                filter_obj = Filter(
+                    name=name,
+                    filter_type=filter_type,
+                    table_name=table_name,
+                    column_name=column_name,
+                    page_name=page_name,
+                    visual_name=visual_name,
+                    description=description
+                )
+                filters.append(filter_obj)
+        
+        return filters
+
+    def __repr__(self):
+        return f"Filter(name={self.name}, type={self.filter_type}, {self.table_name}.{self.column_name})"
+
+
 class Page(FilterMixin):
     """Representa una página de un informe, incluyendo sus visuales."""
 
@@ -191,7 +398,12 @@ class Page(FilterMixin):
         self.visibility = data.get("visibility")
         self.filterConfig = data.get("filterConfig", {})
 
-        self.filters = self.extract_filter_descriptions(self.filterConfig)
+        self.filter_descriptions = self.extract_filter_descriptions(self.filterConfig)
+        self.filters = Filter.extract_from_config(
+            self.filterConfig,
+            filter_type="page",
+            page_name=self.name
+        )
         self.visuals: List[Visual] = []
         self._load_visuals(page_dir)
 
@@ -327,7 +539,7 @@ class Page(FilterMixin):
         return f"""
         <g transform='translate({x},{y})'>
             <rect width='{w}' height='{h}' fill='none' stroke='#999' rx='4' ry='4'/>
-            <text x='{w/2}' y='{h/2}' font-family='Segoe UI' font-size='14' fill='#333' text-anchor='middle' dominant-baseline='middle'>{label}</text>
+            <text x='10' y='15' font-family='Segoe UI' font-size='14' fill='#333'>{label}</text>
         </g>
         """
 
@@ -603,10 +815,24 @@ class Page(FilterMixin):
 class clsReport(FilterMixin):
     """Clase principal para cargar y representar un informe completo."""
 
-    def __init__(self, root_path: str):
+    def __init__(self, root_path: str, report_id: str = None, workspace_id: str = None, report_name: str = None):
         self.root_path = root_path
+        self.report_id = report_id  # ID del reporte desde Microsoft Fabric
+        self.workspace_id = workspace_id  # ID del workspace desde Microsoft Fabric
+        self.report_name = report_name  # Nombre del reporte (displayName desde Power BI)
         self.report_path = self._find_report_json()
-        self.pages_path = os.path.join(os.path.dirname(self.report_path), 'pages') if self.report_path else None
+        self.report_format = None  # Se establecerá en _load_report_json()
+        self._report_data = None  # Almacenar datos raw del report.json
+        
+        # Determinar ruta de páginas basado en formato encontrado
+        if self.report_path:
+            report_dir = os.path.dirname(self.report_path)
+            # Si report.json está en .../definition/, las páginas estarán en .../definition/pages/
+            # Si report.json está en raíz, las páginas estarán en ./pages/
+            potential_pages_path = os.path.join(report_dir, 'pages')
+            self.pages_path = potential_pages_path if os.path.isdir(potential_pages_path) else None
+        else:
+            self.pages_path = None
         
         self.schema = None
         self.themeCollection = None
@@ -619,13 +845,20 @@ class clsReport(FilterMixin):
         self.pageOrder = []
         self.activePageName = None
         self.allfilters = []
+        self.filters: List[Filter] = []
         self.pages: List[Page] = []
         self.SemanticModel = ""
+        self.semantic_model_id = None
         
         if self.report_path:
+            print(f"[INFO] Parseando report.json...")
             self._load_report_json()
-        if self.pages_path and os.path.isdir(self.pages_path):
+            
+            # Cargar páginas basado en el formato detectado
+            print(f"[INFO] Cargando paginas...")
             self._load_pages()
+        else:
+            print(f"[WARN] No se pudo encontrar report.json para {root_path}")
 
     def _extract_semantic_model_name(self):
         """Extrae el nombre del modelo semántico desde definition.pbir"""
@@ -644,6 +877,10 @@ class clsReport(FilterMixin):
         # Caso 1: byConnection
         if "byConnection" in dataset_ref:
             connection_string = dataset_ref["byConnection"].get("connectionString", "")
+            # Extraer ID del modelo semántico
+            id_match = re.search(r'semanticmodelid=([a-f0-9\-]+)', connection_string)
+            if id_match:
+                self.semantic_model_id = id_match.group(1)
             match = re.search(r'Data Source="powerbi://api\.powerbi\.com/v1\.0/myorg/(.*?)"', connection_string)
             if match:
                 return match.group(1)
@@ -658,13 +895,32 @@ class clsReport(FilterMixin):
         return None
     
     def _find_report_json(self) -> Optional[str]:
-        """Busca el archivo report.json dentro de la carpeta 'definition'."""
+        """Busca el archivo report.json en dos formatos:
+        1. Formato nuevo PBIR: carpeta 'definition/report.json'
+        2. Formato antiguo: 'report.json' en la raíz
+        """
+        if not os.path.exists(self.root_path):
+            print(f"⚠️ La ruta del reporte NO EXISTE: {self.root_path}")
+            return None
+        
+        # Caso 1: Buscar en formato nuevo (PBIR) - dentro de carpeta 'definition/'
         for root, dirs, files in os.walk(self.root_path):
             if 'definition' in dirs:
                 definition_path = os.path.join(root, 'definition')
                 report_path = os.path.join(definition_path, 'report.json')
                 if os.path.isfile(report_path):
+                    print(f"[OK] Encontrado report.json (formato PBIR) en: {report_path}")
                     return report_path
+        
+        # Caso 2: Buscar en formato antiguo - report.json en la raíz
+        report_path = os.path.join(self.root_path, 'report.json')
+        if os.path.isfile(report_path):
+            print(f"[OK] Encontrado report.json (formato antiguo) en: {report_path}")
+            return report_path
+        
+        # Si no encuentra nada, mostrar información de debug
+        print(f"[ERROR] report.json NO ENCONTRADO en: {self.root_path}")
+        print(f"   Carpetas/archivos en raiz: {os.listdir(self.root_path) if os.path.exists(self.root_path) else 'N/A'}")
         return None
 
     def _load_report_json(self):
@@ -681,18 +937,52 @@ class clsReport(FilterMixin):
             print(f"Error al cargar report.json: {e}")
             data = {}
 
+        # Detectar formato: PBIR (con $schema) o antiguo (con sections y config)
+        self.report_format = "pbir" if "$schema" in data else "legacy"
+        print(f"   Formato detectado: {self.report_format.upper()}")
+        
         self.schema = data.get("$schema")
         self.themeCollection = data.get("themeCollection")
         self.filterConfig = data.get("filterConfig", {})
+        
+        # En legacy, los filtros de reporte están en la clave "filters" (puede ser JSON string)
+        if self.report_format == "legacy" and not self.filterConfig:
+            raw_filters = data.get("filters", [])
+            if isinstance(raw_filters, str):
+                try:
+                    raw_filters = json.loads(raw_filters)
+                except json.JSONDecodeError:
+                    raw_filters = []
+            if isinstance(raw_filters, list) and raw_filters:
+                self.filterConfig = {"filters": raw_filters}
+        
         self.objects = data.get("objects")
         self.publicCustomVisuals = data.get("publicCustomVisuals")
         self.resourcePackages = data.get("resourcePackages")
         self.settings = data.get("settings")
         self.slowDataSourceSettings = data.get("slowDataSourceSettings")
-        self.allfilters = self.extract_filter_descriptions(self.filterConfig)
+        
+        # Almacenar los datos crudos para formato antiguo
+        self._report_data = data
+        
+        self.allfilter_descriptions = self.extract_filter_descriptions(self.filterConfig)
+        self.filters = Filter.extract_from_config(
+            self.filterConfig,
+            filter_type="report"
+        )
 
     def _load_pages(self):
-        """Carga las páginas del informe desde la carpeta 'pages'."""
+        """Carga las páginas del informe desde la carpeta 'pages' (PBIR) o desde 'sections' (legacy)."""
+        
+        if self.report_format == "legacy":
+            self._load_legacy_pages()
+        elif self.pages_path and os.path.isdir(self.pages_path):
+            self._load_pbir_pages()
+        else:
+            print(f"⚠️ No se encontraron páginas (format={self.report_format}, pages_path={self.pages_path})")
+    
+    def _load_pbir_pages(self):
+        """Carga las páginas en formato PBIR desde la carpeta 'pages'."""
         if not self.pages_path:
             return
         pages_metadata_file = os.path.join(self.pages_path, 'pages.json')
@@ -709,6 +999,161 @@ class clsReport(FilterMixin):
             page_file = os.path.join(page_dir, 'page.json')
             if os.path.isfile(page_file):
                 self.pages.append(Page(page_dir))
+    
+    def _load_legacy_pages(self):
+        """Carga las páginas en formato legacy desde el array 'sections' del report.json."""
+        if not self._report_data:
+            return
+        
+        sections = self._report_data.get('sections', [])
+        for idx, section in enumerate(sections):
+            try:
+                # Crear un objeto Page simulado desde cada section
+                page = self._create_page_from_legacy_section(section, idx)
+                if page:
+                    self.pages.append(page)
+                    # Agregar el ID de la página al pageOrder
+                    if 'name' in section:
+                        self.pageOrder.append(section['name'])
+            except Exception as e:
+                print(f"Error al procesar legacy section {idx}: {e}")
+        
+        # Establecer la primera página como activa si no hay información
+        if self.pages and not self.activePageName:
+            self.activePageName = self.pages[0].name if hasattr(self.pages[0], 'name') else 'Page 1'
+    
+    def _create_page_from_legacy_section(self, section: dict, section_index: int) -> Optional['Page']:
+        """Crea un objeto Page a partir de una section del formato legacy."""
+        try:
+            # Extraer información básica de la section
+            page_name = section.get('name', f'Page {section_index + 1}')
+            display_name = section.get('displayName', page_name)
+            # Crear un directorio temporal para almacenar los datos de la página
+            # Usar pages_path si existe, sino usar el root_path
+            base_dir = self.pages_path if self.pages_path else self.root_path
+            temp_page_dir = os.path.join(base_dir, f'_legacy_{section_index}')
+
+            # Crear el directorio si no existe
+            os.makedirs(temp_page_dir, exist_ok=True)
+
+            # Crear el subdirectorio 'visuals' para almacenar los visuals
+            visuals_dir = os.path.join(temp_page_dir, 'visuals')
+            os.makedirs(visuals_dir, exist_ok=True)
+
+            # Extraer visualContainers y crear archivos visual.json individuales
+            visual_containers = section.get('visualContainers', [])
+            for visual_idx, visual_container in enumerate(visual_containers):
+                # Extraer el config del visual
+                visual_config = visual_container.get('config', '{}')
+
+                # Si config es un string JSON, parsearlo
+                if isinstance(visual_config, str):
+                    try:
+                        visual_data = json.loads(visual_config)
+                    except json.JSONDecodeError:
+                        print(f"⚠️  No se pudo parsear visual config como JSON en visual {visual_idx}")
+                        visual_data = {}
+                else:
+                    visual_data = visual_config
+                # Buscar mapeo de alias a entidad real en prototypeQuery.From
+                alias_map = {}
+                proto_query = visual_data.get('prototypeQuery')
+                if not proto_query:
+                    sv= visual_data.get("singleVisual")
+                    if sv and isinstance(sv, dict):
+                        proto_query = sv.get('prototypeQuery')
+                if proto_query and isinstance(proto_query, dict):
+                    from_list = proto_query.get('From')
+                    if isinstance(from_list, list):
+                        for entry in from_list:
+                            if isinstance(entry, dict) and 'Name' in entry and 'Entity' in entry:
+                                alias_map[entry['Name']] = entry['Entity']
+                
+                def sustituir_source_ref(obj):
+                    if isinstance(obj, dict):
+                        for k, v in obj.items():
+                            # Solo sustituir en SourceRef
+                            if k == 'SourceRef' and isinstance(v, dict):
+                                # Sustituir solo en Source y Entity
+                                if 'Source' in v and v['Source'] in alias_map:
+                                    v['Source'] = alias_map[v['Source']]
+                                if 'Entity' in v and v['Entity'] in alias_map:
+                                    v['Entity'] = alias_map[v['Entity']]
+                            else:
+                                sustituir_source_ref(v)
+                    elif isinstance(obj, list):
+                        for item in obj:
+                            sustituir_source_ref(item)
+
+                sustituir_source_ref(visual_data)
+
+                # En legacy, los filtros del visual están en visualContainer.filters (JSON string separado del config)
+                visual_raw_filters = visual_container.get('filters', '[]')
+                if isinstance(visual_raw_filters, str):
+                    try:
+                        visual_raw_filters = json.loads(visual_raw_filters)
+                    except json.JSONDecodeError:
+                        visual_raw_filters = []
+                if isinstance(visual_raw_filters, list) and visual_raw_filters:
+                    visual_data['filterConfig'] = {"filters": visual_raw_filters}
+
+                # Obtener el nombre del visual o usar un nombre por defecto
+                visual_name = visual_data.get('name', f'visual_{visual_idx}')
+
+                # Crear subdirectorio para este visual
+                visual_dir = os.path.join(visuals_dir, visual_name)
+                os.makedirs(visual_dir, exist_ok=True)
+
+                # Guardar el visual.json
+                visual_json_path = os.path.join(visual_dir, 'visual.json')
+                with open(visual_json_path, 'w', encoding='utf-8') as f:
+                    json.dump(visual_data, f, indent=2)
+            
+            # Crear el page.json (sin visualContainers, ya que ahora están en archivos separados)
+            # En legacy, 'filters' puede ser un string JSON; parsearlo y convertirlo al formato filterConfig
+            raw_filters = section.get('filters', [])
+            if isinstance(raw_filters, str):
+                try:
+                    raw_filters = json.loads(raw_filters)
+                except json.JSONDecodeError:
+                    raw_filters = []
+            # Convertir al formato que Page espera: filterConfig = {"filters": [...]}
+            filter_config = {"filters": raw_filters} if isinstance(raw_filters, list) and raw_filters else {}
+            
+            # Extraer visibility desde el config de la section (es un string JSON en legacy)
+            page_visibility = section.get('visibility')
+            if page_visibility is None:
+                raw_config = section.get('config', '{}')
+                if isinstance(raw_config, str):
+                    try:
+                        config_parsed = json.loads(raw_config)
+                        page_visibility = config_parsed.get('visibility')
+                    except json.JSONDecodeError:
+                        pass
+            
+            page_data = {
+                'name': page_name,
+                'displayName': display_name,
+                'filterConfig': filter_config,
+                'visibility': page_visibility,
+                'height': section.get('height'),
+                'width': section.get('width')
+            }
+            
+            # Guardar el page.json temporal
+            page_json_path = os.path.join(temp_page_dir, 'page.json')
+            with open(page_json_path, 'w', encoding='utf-8') as f:
+                json.dump(page_data, f, indent=2)
+            
+            # Crear el objeto Page desde el directorio
+            page = Page(temp_page_dir)
+            return page
+            
+        except Exception as e:
+            print(f"Error al crear Page desde legacy section: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
 
     def get_all_columns_used(self) -> Dict[str, Set[str]]:
         """Retorna todas las columnas usadas en el informe organizadas por tabla."""
@@ -730,5 +1175,423 @@ class clsReport(FilterMixin):
                     table_measures[table].add(measure)
         return dict(table_measures)
 
+    def _infer_workspace_and_report_id(self, connection):
+        """
+        Intenta inferir workspace_id y report_id desde la base de datos usando los nombres del path.
+        
+        Path ejemplo: "D:\\mcpdata\\toyota\\TES - CONCESIONARIOS\\TES - Gestión Comercial.Report"
+        - Workspace name: "TES - CONCESIONARIOS" (carpeta padre del .Report)
+        - Report name: "TES - Gestión Comercial" (basename sin .Report)
+        
+        Args:
+            connection: Conexión DuckDB
+        """
+        try:
+            # Extraer workspace name del path (carpeta padre del .Report)
+            parent_path = os.path.dirname(self.root_path)
+            workspace_name = os.path.basename(parent_path)
+            
+            # Extraer report name del path (basename sin .Report)
+            basename = os.path.basename(self.root_path)
+            report_name = basename.replace('.Report', '')
+            
+            # Intentar buscar workspace_id si es nulo
+            if not self.workspace_id and workspace_name:
+                try:
+                    # Verificar que la tabla workspace existe
+                    tables = connection.execute("SHOW TABLES").fetchall()
+                    table_names = [t[0] for t in tables]
+                    
+                    if 'workspace' in table_names:
+                        result = connection.execute(
+                            "SELECT id FROM workspace WHERE name = ?", 
+                            [workspace_name]
+                        ).fetchone()
+                        
+                        if result:
+                            self.workspace_id = result[0]
+                            print(f"[INFO] Workspace ID inferido: {self.workspace_id} ('{workspace_name}')")
+                except Exception as e:
+                    # No hay problema si falla, puede ser la primera vez
+                    pass
+            
+            # Intentar buscar report_id si es nulo
+            if not self.report_id and report_name:
+                try:
+                    # Verificar que la tabla report existe
+                    tables = connection.execute("SHOW TABLES").fetchall()
+                    table_names = [t[0] for t in tables]
+                    
+                    if 'report' in table_names:
+                        # Buscar por nombre y workspace_id si lo tenemos
+                        if self.workspace_id:
+                            result = connection.execute(
+                                "SELECT report_id FROM report WHERE name = ? AND workspace_id = ?", 
+                                [report_name, self.workspace_id]
+                            ).fetchone()
+                        else:
+                            # Buscar solo por nombre si no tenemos workspace_id
+                            result = connection.execute(
+                                "SELECT report_id FROM report WHERE name = ?", 
+                                [report_name]
+                            ).fetchone()
+                        
+                        if result:
+                            self.report_id = result[0]
+                            print(f"[INFO] Report ID inferido: {self.report_id} ('{report_name}')")
+                except Exception as e:
+                    # No hay problema si falla, puede ser la primera vez
+                    pass
+                    
+        except Exception as e:
+            # Si algo falla en todo el proceso, no importa
+            pass
+
+    def save_to_database(self, connection):
+        """
+        Guarda el reporte en DuckDB.
+        
+        Args:
+            connection: Conexión DuckDB (duckdb.DuckDBPyConnection)
+        """
+        # Intentar inferir workspace_id y report_id desde la base de datos si son nulos
+        self._infer_workspace_and_report_id(connection)
+        
+        # Obtener nombre del reporte: usar el pasado en constructor > SemanticModel > nombre carpeta
+        report_name = self.report_name  or os.path.basename(self.root_path) or self.SemanticModel
+        if not report_name:
+            report_name = "unknown_report"
+        
+        # Crear secuencias si no existen
+        connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_report_id START 1")
+        connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_report_page_id START 1")
+        connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_report_visual_id START 1")
+        connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_report_column_id START 1")
+        connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_report_measure_id START 1")
+        
+        # Crear tabla report (sin dropear, para acumular múltiples reportes)
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS report (
+                id INTEGER PRIMARY KEY DEFAULT nextval('seq_report_id'),
+                name VARCHAR NOT NULL,
+                report_id VARCHAR,
+                workspace_id VARCHAR,
+                semantic_model_reference VARCHAR,
+                schema VARCHAR,
+                active_page_name VARCHAR,
+                theme_collection JSON,
+                filter_config JSON,
+                created_at TIMESTAMP DEFAULT now(),
+                updated_at TIMESTAMP DEFAULT now()
+            )
+        """)
+        
+        # Buscar si el reporte ya existe (por report_id o por nombre)
+        report_id = None
+        if self.report_id:
+            report_id_result = connection.execute("SELECT id FROM report WHERE report_id = ?", [self.report_id]).fetchall()
+            report_id = report_id_result[0][0] if report_id_result else None
+        if not report_id:
+            report_id_result = connection.execute("SELECT id FROM report WHERE name = ?", [report_name]).fetchall()
+            report_id = report_id_result[0][0] if report_id_result else None
+        
+        if report_id:
+            # Ya existe: actualizar el registro principal
+            connection.execute("""
+                UPDATE report SET name = ?, report_id = ?, workspace_id = ?, semantic_model_reference = ?, 
+                       schema = ?, active_page_name = ?, theme_collection = ?, filter_config = ?, updated_at = now()
+                WHERE id = ?
+            """, [
+                report_name,
+                self.report_id,
+                self.workspace_id,
+                self.semantic_model_id,
+                self.schema,
+                self.activePageName,
+                json.dumps(self.themeCollection) if self.themeCollection else None,
+                json.dumps(self.filterConfig) if self.filterConfig else None,
+                report_id
+            ])
+        else:
+            # No existe: insertar nuevo
+            connection.execute("""
+                INSERT INTO report (name, report_id, workspace_id, semantic_model_reference, schema, active_page_name, theme_collection, filter_config)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, [
+                report_name,
+                self.report_id,
+                self.workspace_id,
+                self.semantic_model_id,
+                self.schema,
+                self.activePageName,
+                json.dumps(self.themeCollection) if self.themeCollection else None,
+                json.dumps(self.filterConfig) if self.filterConfig else None
+            ])
+            # Obtener el ID del registro recién insertado
+            if self.report_id:
+                report_id_result = connection.execute("SELECT id FROM report WHERE report_id = ?", [self.report_id]).fetchall()
+                report_id = report_id_result[0][0] if report_id_result else None
+            if not report_id:
+                report_id_result = connection.execute("SELECT id FROM report WHERE name = ?", [report_name]).fetchall()
+                report_id = report_id_result[0][0] if report_id_result else None
+        
+        if not report_id:
+            print(f"⚠️ No se pudo obtener el ID del reporte {report_name}")
+            return
+        
+        # CREAR TODAS LAS TABLAS PRIMERO (antes de hacer DELETEs)
+        
+        # Crear tabla report_page (drop y recrear para incluir visibility)
+        connection.execute("DROP TABLE IF EXISTS report_page")
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS report_page (
+                id INTEGER PRIMARY KEY DEFAULT nextval('seq_report_page_id'),
+                report_name VARCHAR NOT NULL,
+                name VARCHAR NOT NULL,
+                display_name VARCHAR,
+                height INTEGER,
+                width INTEGER,
+                display_option VARCHAR,
+                is_visible BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT now()
+            )
+        """)
+        
+        # Crear tabla report_visual (UNA SOLA VEZ, antes de insertar datos)
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS report_visual (
+                id INTEGER PRIMARY KEY DEFAULT nextval('seq_report_visual_id'),
+                report_id INTEGER NOT NULL,
+                page_name VARCHAR NOT NULL,
+                report_name VARCHAR NOT NULL,
+                name VARCHAR NOT NULL,
+                visual_type VARCHAR,
+                position_x FLOAT,
+                position_y FLOAT,
+                position_width FLOAT,
+                position_height FLOAT,
+                text_content TEXT,
+                navigation_target VARCHAR,
+                created_at TIMESTAMP DEFAULT now(),
+                FOREIGN KEY(report_id) REFERENCES report(id)
+            )
+        """)
+        
+        # Crear tabla report_column_used
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS report_column_used (
+                id INTEGER PRIMARY KEY DEFAULT nextval('seq_report_column_id'),
+                report_id INTEGER NOT NULL,
+                page_name VARCHAR NOT NULL,
+                visual_name VARCHAR NOT NULL,
+                table_name VARCHAR NOT NULL,
+                column_name VARCHAR NOT NULL,
+                usage_count INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT now(),
+                FOREIGN KEY(report_id) REFERENCES report(id)
+            )
+        """)
+        
+        # Crear tabla report_measure_used
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS report_measure_used (
+                id INTEGER PRIMARY KEY DEFAULT nextval('seq_report_measure_id'),
+                report_id INTEGER NOT NULL,
+                page_name VARCHAR NOT NULL,
+                visual_name VARCHAR NOT NULL,
+                table_name VARCHAR NOT NULL,
+                measure_name VARCHAR NOT NULL,
+                usage_count INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT now(),
+                FOREIGN KEY(report_id) REFERENCES report(id)
+            )
+        """)
+        
+        # Crear secuencias para filtros
+        connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_report_filter_id START 1")
+        connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_report_page_filter_id START 1")
+        connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_report_visual_filter_id START 1")
+        
+        # Crear tabla report_filter (filtros a nivel de reporte)
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS report_filter (
+                id INTEGER PRIMARY KEY DEFAULT nextval('seq_report_filter_id'),
+                report_id INTEGER NOT NULL,
+                filter_name VARCHAR NOT NULL,
+                table_name VARCHAR NOT NULL,
+                column_name VARCHAR NOT NULL,
+                filter_description TEXT,
+                created_at TIMESTAMP DEFAULT now(),
+                FOREIGN KEY(report_id) REFERENCES report(id)
+            )
+        """)
+        
+        # Crear tabla report_page_filter (filtros a nivel de página)
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS report_page_filter (
+                id INTEGER PRIMARY KEY DEFAULT nextval('seq_report_page_filter_id'),
+                report_id INTEGER NOT NULL,
+                page_name VARCHAR NOT NULL,
+                filter_name VARCHAR NOT NULL,
+                table_name VARCHAR NOT NULL,
+                column_name VARCHAR NOT NULL,
+                filter_description TEXT,
+                created_at TIMESTAMP DEFAULT now(),
+                FOREIGN KEY(report_id) REFERENCES report(id)
+            )
+        """)
+        
+        # Crear tabla report_visual_filter (filtros a nivel de visual)
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS report_visual_filter (
+                id INTEGER PRIMARY KEY DEFAULT nextval('seq_report_visual_filter_id'),
+                report_id INTEGER NOT NULL,
+                page_name VARCHAR NOT NULL,
+                visual_name VARCHAR NOT NULL,
+                filter_name VARCHAR NOT NULL,
+                table_name VARCHAR NOT NULL,
+                column_name VARCHAR NOT NULL,
+                filter_description TEXT,
+                created_at TIMESTAMP DEFAULT now(),
+                FOREIGN KEY(report_id) REFERENCES report(id)
+            )
+        """)
+        
+        # AHORA SÍ: Limpiar datos antiguos de este reporte (sin dropear las tablas completas)
+        connection.execute("DELETE FROM report_measure_used WHERE report_id = ?", [report_id])
+        connection.execute("DELETE FROM report_column_used WHERE report_id = ?", [report_id])
+        connection.execute("DELETE FROM report_visual WHERE report_id = ?", [report_id])
+        connection.execute("DELETE FROM report_page WHERE report_name = ?", [report_name])
+        connection.execute("DELETE FROM report_filter WHERE report_id = ?", [report_id])
+        connection.execute("DELETE FROM report_page_filter WHERE report_id = ?", [report_id])
+        connection.execute("DELETE FROM report_visual_filter WHERE report_id = ?", [report_id])
+        
+        # Insertar páginas e visuals
+        for page in self.pages:
+            # visibility=1 significa oculta en Power BI, 0 o None = visible
+            is_visible = not (page.visibility == 1)
+            connection.execute("""
+                INSERT INTO report_page (report_name, name, display_name, height, width, display_option, is_visible)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, [
+                report_name,
+                page.name,
+                page.displayName,
+                page.height,
+                page.width,
+                page.displayOption,
+                is_visible
+            ])
+            
+            # Insertar visuals de la página
+            for visual in page.visuals:
+                connection.execute("""
+                    INSERT INTO report_visual (report_id, page_name, report_name, name, visual_type, position_x, position_y, position_width, position_height, text_content, navigation_target)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, [
+                    report_id,
+                    page.name,
+                    report_name,
+                    visual.name,
+                    visual.visualType,
+                    visual.position.get('x'),
+                    visual.position.get('y'),
+                    visual.position.get('width'),
+                    visual.position.get('height'),
+                    visual.text,
+                    visual.navigationTarget
+                ])
+        
+        # Insertar columnas usadas (con relación a report_visual)
+        columns_used = self.get_all_columns_used()
+        
+        # Insertar columnas usadas por cada visual
+        for page in self.pages:
+            for visual in page.visuals:
+                # Agrupar columnas usadas en este visual
+                visual_columns = {}
+                for col_ref in visual.columns_used:
+                    if '.' in col_ref:
+                        parts = col_ref.split('.')
+                        table = parts[0]
+                        col = '.'.join(parts[1:])
+                        key = (table, col)
+                        visual_columns[key] = visual_columns.get(key, 0) + 1
+                
+                # Insertar cada columna con su contador
+                for (table, col), count in visual_columns.items():
+                    connection.execute("""
+                        INSERT INTO report_column_used (report_id, page_name, visual_name, table_name, column_name, usage_count)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, [report_id, page.name, visual.name, table, col, count])
+        
+        # Insertar medidas usadas (con relación a report_visual)
+        measures_used = self.get_all_measures_used()
+        
+        # Insertar medidas usadas por cada visual
+        for page in self.pages:
+            for visual in page.visuals:
+                # Agrupar medidas usadas en este visual
+                visual_measures = {}
+                for measure_ref in visual.measures_used:
+                    if '.' in measure_ref:
+                        parts = measure_ref.split('.')
+                        table = parts[0]
+                        measure = '.'.join(parts[1:])
+                        key = (table, measure)
+                        visual_measures[key] = visual_measures.get(key, 0) + 1
+                
+                # Insertar cada medida con su contador
+                for (table, measure), count in visual_measures.items():
+                    connection.execute("""
+                        INSERT INTO report_measure_used (report_id, page_name, visual_name, table_name, measure_name, usage_count)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, [report_id, page.name, visual.name, table, measure, count])
+        
+        # Insertar filtros a nivel de REPORTE
+        for filter_obj in self.filters:
+            connection.execute("""
+                INSERT INTO report_filter (report_id, filter_name, table_name, column_name, filter_description)
+                VALUES (?, ?, ?, ?, ?)
+            """, [
+                report_id,
+                filter_obj.name,
+                filter_obj.table_name,
+                filter_obj.column_name,
+                filter_obj.description
+            ])
+        
+        # Insertar filtros a nivel de PÁGINA y VISUAL
+        for page in self.pages:
+            # Filtros a nivel de página
+            for filter_obj in page.filters:
+                connection.execute("""
+                    INSERT INTO report_page_filter (report_id, page_name, filter_name, table_name, column_name, filter_description)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, [
+                    report_id,
+                    page.name,
+                    filter_obj.name,
+                    filter_obj.table_name,
+                    filter_obj.column_name,
+                    filter_obj.description
+                ])
+            
+            # Filtros a nivel de visual
+            for visual in page.visuals:
+                for filter_obj in visual.filters:
+                    connection.execute("""
+                        INSERT INTO report_visual_filter (report_id, page_name, visual_name, filter_name, table_name, column_name, filter_description)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, [
+                        report_id,
+                        page.name,
+                        visual.name,
+                        filter_obj.name,
+                        filter_obj.table_name,
+                        filter_obj.column_name,
+                        filter_obj.description
+                    ])
+
     def __repr__(self):
-        return f"clsReport(model={self.SemanticModel}, pages={len(self.pages)})"
+        return f"clsReport(model={self.SemanticModel}, model_id={self.semantic_model_id}, pages={len(self.pages)})"

@@ -1,5 +1,23 @@
 # Power BI Semantic Model Management Library
 
+---
+
+## 🦆 Integración con DuckDB (rama mcpconduckdb)
+
+En esta rama, la base de datos DuckDB se utiliza como **fuente central de información** para el análisis y gestión de dependencias en modelos y reportes de Power BI. Casi todas las operaciones del MCP se basan en los datos almacenados en DuckDB, lo que permite:
+
+- Parsear y guardar información de **visuales** de reportes (tipo, campos usados, posición, etc.)
+- Almacenar detalles de **modelos semánticos**, incluyendo tablas, columnas, relaciones y medidas
+- Registrar el uso de columnas y medidas en cada visual y reporte
+- Consultar rápidamente dependencias entre reportes, tablas y columnas
+- Optimizar la detección de elementos no utilizados y la generación de submodelos
+
+**La idea principal:**
+
+> Toda la lógica de análisis de dependencias y optimización de modelos/reportes se apoya en la información estructurada y consultable de DuckDB, en vez de recorrer archivos y carpetas cada vez.
+
+Esto permite mayor velocidad, consultas complejas y una base sólida para futuras automatizaciones.
+
 **Español | [English](README_EN.md)**
 
 ---
@@ -12,6 +30,7 @@ Biblioteca de Python para manipular modelos semánticos de Power BI (archivos `.
 - **Creación de submodelos** con filtrado inteligente de tablas y relaciones
 - **Filtrado de elementos** (columnas, medidas, jerarquías) con modos include/exclude
 - **Análisis de reportes** (.Report) para extraer columnas y medidas usadas
+  - ✅ **Soporte Dual de Formatos:** PBIR (nuevo) y Legacy (antiguo)
 - **Generación de SVG** de páginas de reportes con visuales
 - **Preservación de metadatos** y propiedades originales
 - **Soporte para TMDL** (formato de definición de modelos tabulares)
@@ -37,6 +56,60 @@ source .venv/bin/activate
 
 # Instalar dependencias (si las hay)
 # pip install -r requirements.txt
+```
+
+## ⚙️ Configuración del MCP Server
+
+El servidor MCP está configurado para almacenar todos los datos, caché y bases de datos en una ubicación centralizada. Por defecto, esta ruta es `D:/mcpdata`, pero puedes cambiarla según tu sistema.
+
+### Cambiar la ruta de datos del MCP
+
+**Opción 1: Modificar la configuración en Python**
+
+Cuando inicies el MCP server desde código, puedes especificar la ruta:
+
+```python
+from mcp_server import PowerBIModelServer
+from pathlib import Path
+
+# Usar ruta personalizada
+server = PowerBIModelServer(
+    models_path=Path("Modelos"),
+    data_path="D:/mcpdata"  # Cambiar a tu ruta preferida
+)
+```
+
+**Opción 2: Usar en diferentes sistemas**
+
+- **Windows:** `D:/mcpdata` o `C:/ProgramData/mcpdata`
+- **Linux/Mac:** `/opt/mcpdata` o `$HOME/.mcpdata`
+
+### Estructura de carpetas
+
+Una vez configurada, el MCP creará automáticamente la siguiente estructura:
+
+```
+D:/mcpdata/
+├── demostracion.duckdb       # BD por defecto
+├── powerbi.duckdb            # BD de importaciones
+├── powerbiinfo.json          # Información de workspaces
+├── powerbi_auth_status.json  # Estado de autenticación
+├── fabric_token_cache.json   # Token de autenticación (creado tras login)
+└── DemoADN/                  # Workspace descargado
+    ├── modelo.SemanticModel/
+    ├── modelo.Report/
+    └── ...
+```
+
+### Cambiar ruta en tiempo de ejecución
+
+Si necesitas cambiar la ruta de datos mientras el servidor está ejecutándose:
+
+```python
+from Importer.src.import_from_powerbi import set_data_path
+
+# Cambiar ruta antes de hacer login
+set_data_path("D:/otra_ruta")
 ```
 
 ## 🔧 Uso Básico
