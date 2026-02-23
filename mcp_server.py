@@ -1044,8 +1044,8 @@ class PowerBIModelServer:
         # Crear especificaciones de tablas
         table_specs = [(table, search_direction) for table in tables]
         
-        # Crear submodelo
-        subset = model.create_subset_model(
+        # Crear submodelo (legacy: selección manual de tablas)
+        subset = model.create_subset_model_legacy(
             table_specs=table_specs,
             subset_name=target_model,
             recursive=recursive,
@@ -1077,81 +1077,46 @@ class PowerBIModelServer:
         include_related: bool,
         copy_reports: bool
     ) -> list[TextContent]:
-        """Crea modelo basado en reportes"""
+        """Crea modelo basado en reportes usando datos de DuckDB.
+
+        Utiliza ``create_subset_model_from_db`` que consulta las tablas
+        ``report_column_used``, ``report_measure_used`` y
+        ``semantic_model_measure_dependencies`` para determinar qué tablas,
+        columnas, medidas y relaciones necesita el submodelo.
+        """
         
         source_path = self.models_path / source_model
         if not source_path.exists():
             return [TextContent(type="text", text=f"Error: Modelo fuente '{source_model}' no encontrado")]
         
-        # Si no se especifican reportes, usar todos
-        if not reports:
-            reports = [d.name for d in self.models_path.iterdir() 
-                      if d.is_dir() and d.name.endswith('.Report')]
-        
-        # Analizar reportes
-        all_columns = defaultdict(set)
-        all_measures = defaultdict(set)
-        for report_name in reports:
-            report_path = self.models_path / report_name
-            if not report_path.exists():
-                continue
-            
-            report_obj = clsReport(str(report_path))
-            columns_refs = report_obj.get_all_columns_used()
-            measures_refs = report_obj.get_all_measures_used()
-            
-            for table, fields in columns_refs.items():
-                all_columns[table].update(fields)
-            for table, fields in measures_refs.items():
-                all_measures[table].update(fields)
-        
+        db_path = str(self.default_db_path)
+
         # Cargar modelo fuente
         model = SemanticModel(str(source_path))
         model.load_from_directory(source_path)
         
-        # Separar columnas y medidas por tabla
-        element_specs = {}
-        all_tables = set(list(all_columns.keys()) + list(all_measures.keys()))
-        
-        for table in all_tables:
-            original_table = next((t for t in model.tables if t.name == table), None)
-            if not original_table:
-                continue
-            
-            columns_list = sorted(list(all_columns.get(table, set())))
-            measures_list = sorted(list(all_measures.get(table, set())))
-            
-            element_specs[table] = TableElementSpec(
-                columns=columns_list if columns_list else None,
-                measures=measures_list if measures_list else None,
-                mode='include'
-            )
-        
-        # Crear submodelo
-        subset = model.create_subset_model(
-            table_specs=list(all_tables),
+        # Crear submodelo desde la base de datos
+        subset = model.create_subset_model_from_db(
+            db_path=db_path,
             subset_name=target_model,
-            recursive=include_related,
-            max_depth=0 if not include_related else 3,
-            table_elements=element_specs
         )
         
         # Guardar
         target_path = self.models_path / target_model
         subset.save_to_directory(target_path)
 
-        # Crear pbip + report vacío por defecto
-        await self._scaffold_empty_report_and_pbip(target_model)
-
         # Si se solicita, copiar páginas de los reportes origen, acumulando
         if copy_reports:
+            if not reports:
+                reports = [d.name for d in self.models_path.iterdir()
+                          if d.is_dir() and d.name.endswith('.Report')]
             await self._copy_and_merge_report_pages(
                 source_reports=reports,
                 target_report_name=self._derive_report_name_from_model(target_model)
             )
         
         result = f"✅ Modelo optimizado creado: {target_model}\n\n"
-        result += f"Basado en {len(reports)} reportes\n"
+        result += f"Basado en datos de DuckDB ({db_path})\n"
         result += f"Tablas: {len(subset.tables)}\n"
         result += f"Relaciones: {len(subset.relationships)}\n\n"
         
@@ -1169,123 +1134,7 @@ class PowerBIModelServer:
 
     async def _scaffold_empty_report_and_pbip(self, model_name: str) -> None:
         """Crea un .pbip y un .Report vacío enlazado al modelo."""
-        base = model_name.replace('.SemanticModel', '')
-        report_dir = self.models_path / f"{base}.Report"
-        report_dir.mkdir(parents=True, exist_ok=True)
-
-        # .platform (metadata del report)
-        platform_path = report_dir / ".platform"
-        platform_obj = {
-            "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
-            "metadata": {
-                "type": "Report",
-                "displayName": base
-            },
-            "config": {
-                "version": "2.0",
-                "logicalId": str(uuid.uuid4())
-            }
-        }
-        platform_path.write_text(json.dumps(platform_obj, indent=2), encoding="utf-8")
-
-        # definition.pbir (link al modelo)
-        pbir_path = report_dir / "definition.pbir"
-        pbir_obj = {
-            "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definitionProperties/2.0.0/schema.json",
-            "version": "4.0",
-            "datasetReference": {
-                "byPath": {
-                    "path": f"../{model_name}"
-                }
-            }
-        }
-        pbir_path.write_text(json.dumps(pbir_obj, indent=2), encoding="utf-8")
-
-        # Estructura básica de report
-        definition_dir = report_dir / "definition"
-        pages_dir = definition_dir / "pages"
-        static_dir = report_dir / "StaticResources" / "SharedResources"
-        definition_dir.mkdir(parents=True, exist_ok=True)
-        pages_dir.mkdir(parents=True, exist_ok=True)
-        static_dir.mkdir(parents=True, exist_ok=True)
-
-        report_json = {
-            "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/report/3.0.0/schema.json",
-            "themeCollection": {
-                "baseTheme": {
-                    "name": "CY25SU11",
-                    "reportVersionAtImport": {
-                        "visual": "2.4.0",
-                        "report": "3.0.0",
-                        "page": "2.3.0"
-                    },
-                    "type": "SharedResources"
-                }
-            },
-            "resourcePackages": [
-                {
-                    "name": "SharedResources",
-                    "type": "SharedResources",
-                    "items": [
-                        {
-                            "name": "CY25SU11",
-                            "path": "BaseThemes/CY25SU11.json",
-                            "type": "BaseTheme"
-                        }
-                    ]
-                }
-            ],
-            "settings": {
-                "useStylableVisualContainerHeader": True,
-                "exportDataMode": "AllowSummarized",
-                "defaultDrillFilterOtherVisuals": True,
-                "allowChangeFilterTypes": True,
-                "useEnhancedTooltips": True,
-                "useDefaultAggregateDisplayName": True
-            }
-        }
-        (definition_dir / "report.json").write_text(json.dumps(report_json, indent=2), encoding="utf-8")
-        
-        version_json = {
-            "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/versionMetadata/1.0.0/schema.json",
-            "version": "2.0.0"
-        }
-        (definition_dir / "version.json").write_text(json.dumps(version_json, indent=2), encoding="utf-8")
-        
-        # Crear pages.json con una página vacía
-        page_id = str(uuid.uuid4()).replace('-', '')[:20]  # ID de 20 caracteres
-        pages_json = {
-            "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/pagesMetadata/1.0.0/schema.json",
-            "pageOrder": [page_id],
-            "activePageName": page_id
-        }
-        (pages_dir / "pages.json").write_text(json.dumps(pages_json, indent=2), encoding="utf-8")
-        
-        # Crear directorio de página y archivo page.json
-        page_folder = pages_dir / page_id
-        page_folder.mkdir(parents=True, exist_ok=True)
-        
-        page_json = {
-            "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/page/2.0.0/schema.json",
-            "name": page_id,
-            "displayName": "Página 1",
-            "displayOption": "FitToPage",
-            "height": 720,
-            "width": 1280
-        }
-        (page_folder / "page.json").write_text(json.dumps(page_json, indent=2), encoding="utf-8")
-
-        # Crear .pbip que apunte al report
-        pbip_path = self.models_path / f"{base}.pbip"
-        pbip_obj = {
-            "$schema": "https://developer.microsoft.com/json-schemas/fabric/pbip/pbipProperties/1.0.0/schema.json",
-            "version": "1.0",
-            "artifacts": [
-                {"report": {"path": f"{base}.Report"}}
-            ],
-            "settings": {"enableAutoRecovery": True}
-        }
-        pbip_path.write_text(json.dumps(pbip_obj, indent=2), encoding="utf-8")
+        SemanticModel.scaffold_pbip_and_report(self.models_path, model_name)
 
     async def _copy_and_merge_report_pages(self, source_reports: List[str], target_report_name: str) -> None:
         """Copia páginas de uno o varios reports origen y las acumula en el report destino.

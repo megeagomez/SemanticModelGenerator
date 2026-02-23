@@ -3,6 +3,7 @@ from .report import Visual, Page, clsReport
 from .model import Model
 from .relationship import Relationship
 from .table import Table, Column, Measure, Partition
+from .dax_tokenizer import DaxTokenizer, DaxDependencies
 from .culture import Culture
 from .platform import Platform
 from .definition import Definition
@@ -17,6 +18,8 @@ __all__ = [
     'Column',
     'Measure',
     'Partition',
+    'DaxTokenizer',
+    'DaxDependencies',
     'Culture',
     'Platform',
     'Definition',

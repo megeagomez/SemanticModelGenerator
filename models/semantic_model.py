@@ -2,6 +2,7 @@ from typing import List, Optional, Set, Tuple, Literal, Dict, Any
 from pathlib import Path
 import json
 import os
+import uuid
 from enum import Enum
 
 from .model import Model
@@ -188,7 +189,7 @@ class SemanticModel:
         if self.platform and (not only_modified or self._file_metadata['platform']['modified']):
             self.platform.save_to_file(output_dir / ".platform")
     
-    def create_subset_model(
+    def create_subset_model_legacy(
         self, 
         table_specs: List[Tuple[str, str]] | List[str], 
         subset_name: str, 
@@ -198,8 +199,12 @@ class SemanticModel:
         table_elements: Optional[Dict[str, TableElementSpec]] = None
     ) -> 'SemanticModel':
         """
-        Crea un subconjunto del modelo semántico con las tablas especificadas
+        [LEGACY] Crea un subconjunto del modelo semántico con las tablas especificadas
         y todas las tablas relacionadas según el tipo de relación.
+        
+        NOTA: Este método trabaja sin base de datos. Para la versión que usa
+        DuckDB (report usage + dependencias DAX transitivas), usar
+        create_subset_model_from_db().
         
         Args:
             table_specs: Lista de tablas. Puede ser:
@@ -466,6 +471,419 @@ class SemanticModel:
         
         return subset_model
     
+    def create_subset_model_from_db(
+        self,
+        db_path: str,
+        subset_name: str,
+        semantic_model_id: Optional[int] = None,
+        config_path: Optional[Path] = None,
+        create_pbip: bool = True,
+    ) -> 'SemanticModel':
+        """
+        Crea un subconjunto del modelo semántico basándose en datos de DuckDB.
+
+        Flujo:
+        1. Consulta ``report_column_used`` / ``report_measure_used`` para saber
+           qué columnas y medidas usan los reports asociados a este modelo.
+        2. Consulta ``semantic_model_measure_dependencies`` para obtener las
+           dependencias transitivas de esas medidas (tablas, columnas y medidas
+           adicionales necesarias para que el DAX funcione).
+        3. Consulta ``semantic_model_relationship`` para incluir relaciones
+           cuyas dos tablas estén en el conjunto final.
+        4. Construye el submodelo filtrando tablas, columnas y medidas.
+
+        Args:
+            db_path: Ruta al fichero .duckdb.
+            subset_name: Nombre del nuevo modelo semántico.
+            semantic_model_id: ID numérico en la tabla ``semantic_model``.
+                Si None, se infiere a partir de ``self.semantic_model_id`` (GUID)
+                o del primer modelo disponible.
+            config_path: Ruta donde guardar el JSON de configuración (opcional).
+
+        Returns:
+            Nueva instancia de SemanticModel con el subconjunto.
+        """
+        import duckdb
+
+        conn = duckdb.connect(db_path, read_only=True)
+        try:
+            # ── Resolver semantic_model_id numérico ──────────────────
+            sm_id = semantic_model_id
+            if sm_id is None and self.semantic_model_id:
+                row = conn.execute(
+                    "SELECT id FROM semantic_model WHERE semantic_model_id = ?",
+                    [self.semantic_model_id],
+                ).fetchone()
+                if row:
+                    sm_id = row[0]
+            if sm_id is None:
+                row = conn.execute("SELECT id FROM semantic_model LIMIT 1").fetchone()
+                if not row:
+                    raise ValueError("No semantic models found in database")
+                sm_id = row[0]
+
+            # ── 1. Columnas usadas por reports ───────────────────────
+            used_columns: Dict[str, Set[str]] = {}   # tabla → {cols}
+            rows = conn.execute("""
+                SELECT DISTINCT c.table_name, c.column_name
+                FROM report_column_used c
+                JOIN report r ON r.id = c.report_id
+                WHERE r.semantic_model_reference = (
+                    SELECT semantic_model_id FROM semantic_model WHERE id = ?
+                )
+            """, [sm_id]).fetchall()
+            for tbl, col in rows:
+                used_columns.setdefault(tbl, set()).add(col)
+
+            # ── 2. Medidas usadas por reports ────────────────────────
+            used_measures: Dict[str, Set[str]] = {}   # tabla → {measures}
+            rows = conn.execute("""
+                SELECT DISTINCT m.table_name, m.measure_name
+                FROM report_measure_used m
+                JOIN report r ON r.id = m.report_id
+                WHERE r.semantic_model_reference = (
+                    SELECT semantic_model_id FROM semantic_model WHERE id = ?
+                )
+            """, [sm_id]).fetchall()
+            for tbl, meas in rows:
+                used_measures.setdefault(tbl, set()).add(meas)
+
+            # ── Conjunto base de tablas (las que usan los reports) ───
+            report_tables = set(used_columns.keys()) | set(used_measures.keys())
+
+            # ── 3. Medidas concretas usadas por reports ──────────────
+            all_used_measure_names: Set[str] = set()
+            for measures in used_measures.values():
+                all_used_measure_names |= measures
+
+            # ── 4. Dependencias transitivas de esas medidas ──────────
+            dep_tables: Set[str] = set()          # tablas extra por DAX
+            dep_columns: Dict[str, Set[str]] = {} # tabla → {cols extra}
+            dep_measures: Set[str] = set()         # medidas encadenadas
+
+            if all_used_measure_names:
+                placeholders = ", ".join(["?"] * len(all_used_measure_names))
+                measure_list = list(all_used_measure_names)
+
+                # Tablas requeridas por DAX
+                rows = conn.execute(f"""
+                    SELECT DISTINCT referenced_name
+                    FROM semantic_model_measure_dependencies
+                    WHERE semantic_model_id = ?
+                      AND measure_name IN ({placeholders})
+                      AND dependency_type = 'table'
+                """, [sm_id] + measure_list).fetchall()
+                for (tbl,) in rows:
+                    dep_tables.add(tbl)
+
+                # Columnas requeridas por DAX
+                rows = conn.execute(f"""
+                    SELECT DISTINCT referenced_table, referenced_name
+                    FROM semantic_model_measure_dependencies
+                    WHERE semantic_model_id = ?
+                      AND measure_name IN ({placeholders})
+                      AND dependency_type = 'column'
+                """, [sm_id] + measure_list).fetchall()
+                for tbl, col in rows:
+                    if tbl:
+                        dep_columns.setdefault(tbl, set()).add(col)
+
+                # Medidas encadenadas (A usa B, incluir B)
+                rows = conn.execute(f"""
+                    SELECT DISTINCT referenced_name, referenced_table
+                    FROM semantic_model_measure_dependencies
+                    WHERE semantic_model_id = ?
+                      AND measure_name IN ({placeholders})
+                      AND dependency_type = 'measure'
+                """, [sm_id] + measure_list).fetchall()
+                for meas, tbl in rows:
+                    dep_measures.add(meas)
+                    if tbl:
+                        dep_tables.add(tbl)
+
+            # ── 5. Conjunto final de tablas ──────────────────────────
+            final_tables = report_tables | dep_tables | set(dep_columns.keys())
+
+            # ── 6. Unir columnas: report usage + DAX deps ────────────
+            # Para cada tabla, columnas que deben incluirse
+            final_columns: Dict[str, Set[str]] = {}
+            for tbl in final_tables:
+                cols: Set[str] = set()
+                if tbl in used_columns:
+                    cols |= used_columns[tbl]
+                if tbl in dep_columns:
+                    cols |= dep_columns[tbl]
+                if cols:
+                    final_columns[tbl] = cols
+
+            # ── 7. Unir medidas: report usage + DAX deps ────────────
+            final_measures: Dict[str, Set[str]] = {}
+            # Medidas directamente usadas por reports
+            for tbl, measures in used_measures.items():
+                final_measures.setdefault(tbl, set()).update(measures)
+            # Medidas encadenadas: buscar en qué tabla viven
+            if dep_measures:
+                for table in self.tables:
+                    for measure in table.measures:
+                        if measure.name in dep_measures:
+                            final_measures.setdefault(table.name, set()).add(measure.name)
+                            final_tables.add(table.name)  # asegurar tabla incluida
+
+            # ── 8. Relaciones de la DB donde ambas tablas están ──────
+            subset_relationships = []
+            rel_rows = conn.execute(
+                "SELECT relationship_name, from_table, from_column, "
+                "       to_table, to_column, cardinality, "
+                "       cross_filtering_behavior, security_filtering_behavior, is_active "
+                "FROM semantic_model_relationship WHERE semantic_model_id = ?",
+                [sm_id],
+            ).fetchall()
+
+            required_rel_columns: Dict[str, Set[str]] = {}
+            for (rel_name, from_tbl, from_col, to_tbl, to_col,
+                 card, cross, sec, active) in rel_rows:
+                if from_tbl in final_tables and to_tbl in final_tables:
+                    # Buscar la relación in-memory para conservar raw_content
+                    matched_rel = next(
+                        (r for r in self.relationships
+                         if r.from_table == from_tbl and r.to_table == to_tbl
+                         and r.from_column == from_col and r.to_column == to_col),
+                        None
+                    )
+                    if matched_rel:
+                        subset_relationships.append(matched_rel)
+                    # Columnas de relaciones siempre necesarias
+                    required_rel_columns.setdefault(from_tbl, set()).add(from_col)
+                    required_rel_columns.setdefault(to_tbl, set()).add(to_col)
+
+            # ── 9. Agregar columnas de relaciones a final_columns ────
+            for tbl, cols in required_rel_columns.items():
+                final_columns.setdefault(tbl, set()).update(cols)
+
+        finally:
+            conn.close()
+
+        # ── Logging ──────────────────────────────────────────────────
+        print(f"\n{'='*60}")
+        print(f"create_subset_model_from_db: {subset_name}")
+        print(f"{'='*60}")
+        print(f"  Tablas usadas por reports:      {len(report_tables)}")
+        print(f"  Tablas extra por deps DAX:      {len(dep_tables - report_tables)}")
+        print(f"  Total tablas finales:           {len(final_tables)}")
+        print(f"  Medidas usadas por reports:     {len(all_used_measure_names)}")
+        print(f"  Medidas encadenadas (DAX):      {len(dep_measures - all_used_measure_names)}")
+        print(f"  Relaciones incluidas:           {len(subset_relationships)}")
+
+        # ── 10. Construir submodelo ──────────────────────────────────
+        subset_model = SemanticModel(str(self.base_path.parent / subset_name))
+        subset_model.model = self.model
+        subset_model.platform = self.platform
+        subset_model.definition = self.definition
+        subset_model.cultures = self.cultures.copy()
+
+        subset_model.tables = []
+        for table in self.tables:
+            if table.name not in final_tables:
+                continue
+
+            cols_to_include = final_columns.get(table.name)
+            meas_to_include = final_measures.get(table.name)
+
+            # Siempre filtrar para eliminar columnas no usadas y
+            # generar código M con Table.RemoveColumns
+            filtered = table.filter_elements(
+                columns=sorted(cols_to_include) if cols_to_include else None,
+                measures=sorted(meas_to_include) if meas_to_include else None,
+                mode='include'
+            )
+            subset_model.tables.append(filtered)
+
+        # Relaciones
+        subset_model.relationships = subset_relationships
+
+        # Metadatos para reconstrucción
+        subset_model._file_metadata = {
+            'model': self._file_metadata['model'].copy(),
+            'relationships': {
+                'original_path': self._file_metadata['relationships'].get('original_path'),
+                'modified': False,
+                'content': self._rebuild_relationships_content(subset_relationships)
+            },
+            'tables': {
+                table.name: {
+                    'original_path': self._file_metadata['tables'].get(table.name, {}).get('original_path'),
+                    'modified': table.name in final_columns or table.name in final_measures
+                }
+                for table in subset_model.tables
+            },
+            'cultures': self._file_metadata['cultures'].copy(),
+            'platform': self._file_metadata['platform'].copy(),
+            'definition': self._file_metadata['definition'].copy()
+        }
+
+        # ── Guardar configuración ────────────────────────────────────
+        config = {
+            "name": subset_name,
+            "base_model": self.base_path.name if self.base_path else "Unknown",
+            "method": "from_db",
+            "report_tables": sorted(report_tables),
+            "dax_extra_tables": sorted(dep_tables - report_tables),
+            "included_tables": sorted(final_tables),
+            "total_tables": len(final_tables),
+            "total_relationships": len(subset_relationships),
+            "used_measures": sorted(all_used_measure_names),
+            "chained_measures": sorted(dep_measures - all_used_measure_names),
+        }
+
+        if config_path is None:
+            config_path = self.base_path.parent / f"{subset_name}_config.json"
+        with open(config_path, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+        print(f"  Configuración guardada: {config_path}")
+
+        # ── Resumen de tablas ────────────────────────────────────────
+        for table in sorted(subset_model.tables, key=lambda t: t.name):
+            src = "report" if table.name in report_tables else "dax-dep"
+            print(f"  [{src}] {table.name}: "
+                  f"{len(table.columns)} cols, {len(table.measures)} measures")
+        print(f"{'='*60}\n")
+
+        # ── Scaffold .pbip + .Report vacío ─────────────────────────────
+        if create_pbip:
+            models_path = self.base_path.parent
+            SemanticModel.scaffold_pbip_and_report(models_path, subset_name)
+
+        return subset_model
+
+    # ──────────────────────────────────────────────────────────────
+    # Scaffold: .pbip + .Report vacío
+    # ──────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def scaffold_pbip_and_report(models_path: Path, model_name: str) -> Path:
+        """Crea un .pbip y un .Report vacío enlazado al modelo semántico.
+
+        Args:
+            models_path: Directorio padre donde viven los .SemanticModel.
+            model_name: Nombre del modelo (ej: ``SubmodelADN.SemanticModel``).
+
+        Returns:
+            Path al .pbip creado.
+        """
+        base = model_name.replace('.SemanticModel', '')
+        report_dir = models_path / f"{base}.Report"
+        report_dir.mkdir(parents=True, exist_ok=True)
+
+        # .platform
+        platform_obj = {
+            "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+            "metadata": {"type": "Report", "displayName": base},
+            "config": {"version": "2.0", "logicalId": str(uuid.uuid4())},
+        }
+        (report_dir / ".platform").write_text(
+            json.dumps(platform_obj, indent=2), encoding="utf-8"
+        )
+
+        # definition.pbir
+        pbir_obj = {
+            "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definitionProperties/2.0.0/schema.json",
+            "version": "4.0",
+            "datasetReference": {"byPath": {"path": f"../{model_name}"}},
+        }
+        (report_dir / "definition.pbir").write_text(
+            json.dumps(pbir_obj, indent=2), encoding="utf-8"
+        )
+
+        # Estructura de carpetas
+        definition_dir = report_dir / "definition"
+        pages_dir = definition_dir / "pages"
+        static_dir = report_dir / "StaticResources" / "SharedResources"
+        definition_dir.mkdir(parents=True, exist_ok=True)
+        pages_dir.mkdir(parents=True, exist_ok=True)
+        static_dir.mkdir(parents=True, exist_ok=True)
+
+        # report.json
+        report_json = {
+            "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/report/3.0.0/schema.json",
+            "themeCollection": {
+                "baseTheme": {
+                    "name": "CY25SU11",
+                    "reportVersionAtImport": {
+                        "visual": "2.4.0", "report": "3.0.0", "page": "2.3.0"
+                    },
+                    "type": "SharedResources",
+                }
+            },
+            "resourcePackages": [
+                {
+                    "name": "SharedResources",
+                    "type": "SharedResources",
+                    "items": [
+                        {"name": "CY25SU11", "path": "BaseThemes/CY25SU11.json", "type": "BaseTheme"}
+                    ],
+                }
+            ],
+            "settings": {
+                "useStylableVisualContainerHeader": True,
+                "exportDataMode": "AllowSummarized",
+                "defaultDrillFilterOtherVisuals": True,
+                "allowChangeFilterTypes": True,
+                "useEnhancedTooltips": True,
+                "useDefaultAggregateDisplayName": True,
+            },
+        }
+        (definition_dir / "report.json").write_text(
+            json.dumps(report_json, indent=2), encoding="utf-8"
+        )
+
+        # version.json
+        version_json = {
+            "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/versionMetadata/1.0.0/schema.json",
+            "version": "2.0.0",
+        }
+        (definition_dir / "version.json").write_text(
+            json.dumps(version_json, indent=2), encoding="utf-8"
+        )
+
+        # pages.json + página vacía
+        page_id = str(uuid.uuid4()).replace('-', '')[:20]
+        pages_json = {
+            "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/pagesMetadata/1.0.0/schema.json",
+            "pageOrder": [page_id],
+            "activePageName": page_id,
+        }
+        (pages_dir / "pages.json").write_text(
+            json.dumps(pages_json, indent=2), encoding="utf-8"
+        )
+
+        page_folder = pages_dir / page_id
+        page_folder.mkdir(parents=True, exist_ok=True)
+        page_json = {
+            "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/page/2.0.0/schema.json",
+            "name": page_id,
+            "displayName": "Página 1",
+            "displayOption": "FitToPage",
+            "height": 720,
+            "width": 1280,
+        }
+        (page_folder / "page.json").write_text(
+            json.dumps(page_json, indent=2), encoding="utf-8"
+        )
+
+        # .pbip
+        pbip_path = models_path / f"{base}.pbip"
+        pbip_obj = {
+            "$schema": "https://developer.microsoft.com/json-schemas/fabric/pbip/pbipProperties/1.0.0/schema.json",
+            "version": "1.0",
+            "artifacts": [{"report": {"path": f"{base}.Report"}}],
+            "settings": {"enableAutoRecovery": True},
+        }
+        pbip_path.write_text(json.dumps(pbip_obj, indent=2), encoding="utf-8")
+
+        print(f"  ✅ .pbip creado: {pbip_path}")
+        print(f"  ✅ .Report creado: {report_dir}")
+        return pbip_path
+
     def _find_related_tables_recursive(
         self,
         initial_specs: List[Tuple[str, str]],
@@ -612,7 +1030,7 @@ class SemanticModel:
             }
         
         # Recrear el subconjunto
-        subset_model = base_model.create_subset_model(
+        subset_model = base_model.create_subset_model_legacy(
             table_specs=table_specs,
             subset_name=config['name'],
             config_path=config_path,

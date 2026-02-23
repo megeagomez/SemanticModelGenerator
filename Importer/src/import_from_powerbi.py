@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(current_dir, '../../')))
 from models.semantic_model import SemanticModel
 from models.report import clsReport
 from models.workspace import Workspace
+from models.dax_tokenizer import DaxTokenizer
 from FabricItemDownloader import FabricItemDownloader
 
 logger = logging.getLogger(__name__)
@@ -579,6 +580,20 @@ class PowerBIImporter:
             else:
                 logger.error(f"❌ Carpeta del reporte no encontrada: {report_folder}")
                 print(f"⚠️ Carpeta del reporte no encontrada: {report_folder}")
+
+        # Asegurar que la tabla de dependencias DAX siempre existe (aunque vacía)
+        DaxTokenizer.ensure_dependencies_table(conn)
+
+        # Analizar dependencias DAX de cada modelo semántico
+        logger.info(f"🔍 Analizando dependencias DAX de medidas...")
+        try:
+            tk, measure_table_map = DaxTokenizer.from_duckdb(db_path, conn=conn)
+            inserted = tk.save_dependencies_to_db(db_path, measure_table_map=measure_table_map, conn=conn)
+            logger.info(f"✅ Dependencias DAX guardadas: {inserted} filas")
+            print(f"📊 Dependencias DAX: {inserted} filas guardadas")
+        except Exception as e:
+            logger.error(f"❌ Error analizando dependencias DAX: {e}")
+            print(f"⚠️ Error analizando dependencias DAX: {e}")
 
         # Guardar info actualizada
         os.makedirs(destination_path, exist_ok=True)
