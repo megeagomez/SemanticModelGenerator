@@ -142,7 +142,7 @@ Complete documentation is available in the [`Documentation/`](Documentation/) fo
 - [Platform](Documentation/Platform.md) - Platform configuration
 - [Definition](Documentation/Definition.md) - Model definition
 - [TmdlParser](Documentation/TmdlParser.md) - TMDL format parser
-- [MCP_SERVER](MCP_SERVER.md) - Claude Desktop integration
+- [MCP_SERVER](Documentation/MCP_SERVER.md) - Claude Desktop integration
 - [PROMPTS_HISTORY](Documentation/PROMPTS_HISTORY.md) - Development history
 
 ## 🎯 Use Cases

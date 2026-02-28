@@ -215,7 +215,7 @@ La documentación completa se encuentra en la carpeta [`Documentation/`](Documen
 - [Platform](Documentation/Platform.md) - Configuración de plataforma
 - [Definition](Documentation/Definition.md) - Definición del modelo
 - [TmdlParser](Documentation/TmdlParser.md) - Parser de formato TMDL
-- [MCP_SERVER](MCP_SERVER.md) - Integración con Claude Desktop
+- [MCP_SERVER](Documentation/MCP_SERVER.md) - Integración con Claude Desktop
 - [PROMPTS_HISTORY](Documentation/PROMPTS_HISTORY.md) - Historia del desarrollo
 
 ## 🎯 Casos de Uso

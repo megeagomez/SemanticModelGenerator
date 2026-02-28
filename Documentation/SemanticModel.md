@@ -76,6 +76,23 @@ NO la cardinalidad de las relaciones. Las relaciones se copian con sus propiedad
 - `"OneToMany"`: Busca del lado One hacia el Many (ej: DimProduct → FactSales)
 - `"Both"`: Busca en ambas direcciones
 
+**Detección automática de dependencias:**
+
+El método analiza automáticamente las expresiones DAX de las medidas para detectar referencias 
+a tablas que no están explícitamente en la lista inicial. Por ejemplo:
+
+```python
+# Si FactInternetSales tiene una medida: measure 'mi media' = sum(DimProduct[ProductKey])
+# DimProduct se incluirá automáticamente aunque no esté en table_specs
+subset = semantic_model.create_subset_model(
+    table_specs=["FactInternetSales"],
+    subset_name="SalesModel"
+)
+# Resultado: FactInternetSales + DimProduct (detectada automáticamente)
+```
+
+**Ejemplo de uso:**
+
 ```python
 # Ejemplo: Las relaciones se copian CON SUS PROPIEDADES ORIGINALES
 subset = semantic_model.create_subset_model(
