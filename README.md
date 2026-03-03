@@ -84,14 +84,8 @@ python scripts/inspect_model.py --model "D:/globalai/DemoADN/semanticAdventurewo
 python scripts/inspect_report.py --report "D:/globalai/beacicd/informe 1.Report"
 ```
 
-#### 2.3 Crear mockups, analizar uso de campos y linaje
-```bash
-python scripts/mockup_report.py --report "D:/globalai/beacicd/informe 1.Report"
-python scripts/field_usage.py --report "D:/globalai/beacicd/informe 1.Report"
-python scripts/lineage.py --report "D:/globalai/beacicd/informe 1.Report"
-```
 
-#### 2.4 Generar nuevos modelos según necesidades de informes
+#### 2.3 Generar nuevos modelos según necesidades de informes
 ```bash
 python scripts/create_subset_model.py --model "D:/globalai/DemoADN/semanticAdventureworks.SemanticModel" --columns-used "columns_used.json" --output "D:/globalai/DemoADN/OptimizedModel.SemanticModel"
 ```
