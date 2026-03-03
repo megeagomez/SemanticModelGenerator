@@ -19,6 +19,88 @@ Python library for programmatically manipulating Power BI semantic models (`.Sem
 
 ## 📦 Installation
 
+---
+
+
+
+## 📝 Recommended MCP Workflow
+
+You can work with MCP in two ways: **using Python** or **using the command line**. Both methods allow you to import, query, analyze, and generate Power BI models efficiently.
+
+---
+
+### 1. Using Python
+
+#### 1.1 Import workspaces from Power BI
+```python
+from Importer.src.import_from_powerbi import import_from_powerbi
+import_from_powerbi(
+    workspace_name="DemoADN",
+    db_path="D:/globalai/datosglobalai.duckdb",
+    destination_path="D:/globalai"
+)
+```
+
+#### 1.2 Query and document models and reports
+```python
+from models import SemanticModel, clsReport
+from pathlib import Path
+model = SemanticModel("D:/globalai/DemoADN/semanticAdventureworks.SemanticModel")
+model.load_from_directory(Path("D:/globalai/DemoADN/semanticAdventureworks.SemanticModel"))
+report = clsReport("D:/globalai/beacicd/informe 1.Report")
+columns_used = report.get_all_columns_used()
+```
+
+#### 1.3 Create mockups, analyze field usage, and establish lineage
+```python
+visuals = report.get_visuals()
+usage = report.get_field_usage_summary()
+lineage = report.get_model_lineage()
+```
+
+#### 1.4 Generate new models based on report needs
+```python
+subset = model.create_subset_model(
+    table_specs=list(columns_used.keys()),
+    subset_name="OptimizedModel.SemanticModel",
+    recursive=False
+)
+subset.save_to_directory(Path("D:/globalai/DemoADN/OptimizedModel.SemanticModel"))
+```
+
+---
+
+### 2. Using the command line
+
+#### 2.1 Import workspaces from Power BI
+```bash
+python Importer/src/import_from_powerbi.py --workspace "DemoADN" --db "D:/globalai/datosglobalai.duckdb" --dest "D:/globalai"
+```
+
+#### 2.2 Query and document models and reports
+```bash
+python scripts/inspect_model.py --model "D:/globalai/DemoADN/semanticAdventureworks.SemanticModel"
+python scripts/inspect_report.py --report "D:/globalai/beacicd/informe 1.Report"
+```
+
+#### 2.3 Create mockups, analyze field usage, and establish lineage
+```bash
+python scripts/mockup_report.py --report "D:/globalai/beacicd/informe 1.Report"
+python scripts/field_usage.py --report "D:/globalai/beacicd/informe 1.Report"
+python scripts/lineage.py --report "D:/globalai/beacicd/informe 1.Report"
+```
+
+#### 2.4 Generate new models based on report needs
+```bash
+python scripts/create_subset_model.py --model "D:/globalai/DemoADN/semanticAdventureworks.SemanticModel" --columns-used "columns_used.json" --output "D:/globalai/DemoADN/OptimizedModel.SemanticModel"
+```
+
+---
+
+---
+
+---
+
 ```bash
 # Clone repository
 git clone https://github.com/megeagomez/SemanticModelGenerator.git
@@ -142,7 +224,7 @@ Complete documentation is available in the [`Documentation/`](Documentation/) fo
 - [Platform](Documentation/Platform.md) - Platform configuration
 - [Definition](Documentation/Definition.md) - Model definition
 - [TmdlParser](Documentation/TmdlParser.md) - TMDL format parser
-- [MCP_SERVER](MCP_SERVER.md) - Claude Desktop integration
+- [MCP_SERVER](Documentation/MCP_SERVER.md) - Claude Desktop integration
 - [PROMPTS_HISTORY](Documentation/PROMPTS_HISTORY.md) - Development history
 
 ## 🎯 Use Cases

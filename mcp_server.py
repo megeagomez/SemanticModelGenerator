@@ -6,16 +6,15 @@ Expone herramientas para crear, analizar y optimizar modelos mediante lenguaje n
 
 import asyncio
 import json
-import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 from collections import defaultdict
 
 from mcp.server import Server
 from mcp.types import Tool, TextContent
 import mcp.server.stdio
 
-from models import SemanticModel, TableElementSpec, clsReport
+from models import SemanticModel, clsReport
 
 
 # Configuración

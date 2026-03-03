@@ -339,4 +339,4 @@ descriptions = filter_mixin.extract_filter_descriptions(filter_config)
 - [SemanticModel](SemanticModel.md) - Clase principal para modelos semánticos
 - [Table](Table.md) - Clase para tablas y sus elementos
 - [InmonMode.py](../InmonMode.py) - Ejemplo de uso completo
-- [MCP_SERVER.md](../MCP_SERVER.md) - Integración con Claude Desktop
+- [MCP_SERVER.md](MCP_SERVER.md) - Integración con Claude Desktop

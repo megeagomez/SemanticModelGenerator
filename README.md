@@ -22,6 +22,88 @@ Esto permite mayor velocidad, consultas complejas y una base sólida para futura
 
 ---
 
+
+
+## 📝 Flujo recomendado de trabajo con MCP
+
+Puedes trabajar con MCP de dos formas: **desde Python** o **desde línea de comandos**. Ambos métodos permiten importar, consultar, analizar y generar modelos de Power BI de forma eficiente.
+
+---
+
+### 1. Usando Python
+
+#### 1.1 Importar workspaces desde Power BI
+```python
+from Importer.src.import_from_powerbi import import_from_powerbi
+import_from_powerbi(
+    workspace_name="DemoADN",
+    db_path="D:/globalai/datosglobalai.duckdb",
+    destination_path="D:/globalai"
+)
+```
+
+#### 1.2 Consultar y documentar modelos y reportes
+```python
+from models import SemanticModel, clsReport
+from pathlib import Path
+model = SemanticModel("D:/globalai/DemoADN/semanticAdventureworks.SemanticModel")
+model.load_from_directory(Path("D:/globalai/DemoADN/semanticAdventureworks.SemanticModel"))
+report = clsReport("D:/globalai/beacicd/informe 1.Report")
+columns_used = report.get_all_columns_used()
+```
+
+#### 1.3 Crear mockups, analizar uso de campos y linaje
+```python
+visuals = report.get_visuals()
+usage = report.get_field_usage_summary()
+linaje = report.get_model_lineage()
+```
+
+#### 1.4 Generar nuevos modelos según necesidades de informes
+```python
+subset = model.create_subset_model(
+    table_specs=list(columns_used.keys()),
+    subset_name="OptimizedModel.SemanticModel",
+    recursive=False
+)
+subset.save_to_directory(Path("D:/globalai/DemoADN/OptimizedModel.SemanticModel"))
+```
+
+---
+
+### 2. Usando línea de comandos
+
+#### 2.1 Importar workspaces desde Power BI
+```bash
+python Importer/src/import_from_powerbi.py --workspace "DemoADN" --db "D:/globalai/datosglobalai.duckdb" --dest "D:/globalai"
+```
+
+#### 2.2 Consultar y documentar modelos y reportes
+```bash
+python scripts/inspect_model.py --model "D:/globalai/DemoADN/semanticAdventureworks.SemanticModel"
+python scripts/inspect_report.py --report "D:/globalai/beacicd/informe 1.Report"
+```
+
+#### 2.3 Crear mockups, analizar uso de campos y linaje
+```bash
+python scripts/mockup_report.py --report "D:/globalai/beacicd/informe 1.Report"
+python scripts/field_usage.py --report "D:/globalai/beacicd/informe 1.Report"
+python scripts/lineage.py --report "D:/globalai/beacicd/informe 1.Report"
+```
+
+#### 2.4 Generar nuevos modelos según necesidades de informes
+```bash
+python scripts/create_subset_model.py --model "D:/globalai/DemoADN/semanticAdventureworks.SemanticModel" --columns-used "columns_used.json" --output "D:/globalai/DemoADN/OptimizedModel.SemanticModel"
+```
+
+---
+
+---
+
+---
+
+---
+
 Biblioteca de Python para manipular modelos semánticos de Power BI (archivos `.SemanticModel` y `.Report`) de forma programática.
 
 ## 🚀 Características
@@ -215,7 +297,7 @@ La documentación completa se encuentra en la carpeta [`Documentation/`](Documen
 - [Platform](Documentation/Platform.md) - Configuración de plataforma
 - [Definition](Documentation/Definition.md) - Definición del modelo
 - [TmdlParser](Documentation/TmdlParser.md) - Parser de formato TMDL
-- [MCP_SERVER](MCP_SERVER.md) - Integración con Claude Desktop
+- [MCP_SERVER](Documentation/MCP_SERVER.md) - Integración con Claude Desktop
 - [PROMPTS_HISTORY](Documentation/PROMPTS_HISTORY.md) - Historia del desarrollo
 
 ## 🎯 Casos de Uso
