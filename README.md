@@ -85,22 +85,118 @@ python scripts/inspect_report.py --report "D:/globalai/beacicd/informe 1.Report"
 ```
 
 #### 2.3 Crear mockups, analizar uso de campos y linaje
-```bash
-python scripts/mockup_report.py --report "D:/globalai/beacicd/informe 1.Report"
-python scripts/field_usage.py --report "D:/globalai/beacicd/informe 1.Report"
-python scripts/lineage.py --report "D:/globalai/beacicd/informe 1.Report"
+
+Estos pasos se realizan mejor a través de **prompts a GitHub Copilot o Claude**:
+
 ```
+Prompt ejemplo 1: "Analiza el reporte en D:/globalai/beacicd/informe 1.Report y dame un resumen de campos usados"
+Prompt ejemplo 2: "Crea un mockup SVG de las páginas del reporte"
+Prompt ejemplo 3: "Establece el linaje entre el reporte informe 1 y el modelo semanticAdventureworks"
+```
+
+El MCP se encargará de procesar estas solicitudes automáticamente.
 
 #### 2.4 Generar nuevos modelos según necesidades de informes
-```bash
-python scripts/create_subset_model.py --model "D:/globalai/DemoADN/semanticAdventureworks.SemanticModel" --columns-used "columns_used.json" --output "D:/globalai/DemoADN/OptimizedModel.SemanticModel"
+
+También mediante prompts:
+
+```
+Prompt ejemplo: "Crea un submodelo optimizado para el reporte informe 1 que solo incluya las tablas y columnas utilizadas"
 ```
 
 ---
 
 ---
 
----
+## 🔧 Configuración del MCP en VS Code con GitHub Copilot
+
+Para usar el MCP directamente desde VS Code con GitHub Copilot, necesitas configurar el archivo JSON del servidor MCP.
+
+### 1. Archivos de configuración
+
+El MCP utiliza dos archivos JSON principales:
+
+#### a) Configuración del servidor MCP para Claude Desktop
+
+**Ubicación según sistema:**
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Linux**: `~/.config/Claude/claude_desktop_config.json`
+
+**Contenido:**
+```json
+{
+  "mcpServers": {
+    "powerbi-semantic-model": {
+      "command": "D:\\Python apps\\pyconstelaciones + Reports\\.venv\\Scripts\\python.exe",
+      "args": ["D:\\Python apps\\pyconstelaciones + Reports\\mcp_server.py"]
+    }
+  }
+}
+```
+
+#### b) Configuración para VS Code (extensión GitHub Copilot)
+
+Si usas VS Code con Copilot, adiciona la configuración en **settings.json** de VS Code:
+
+```json
+{
+  "github.copilot.mcp.servers": {
+    "powerbi-semantic-model": {
+      "command": "python",
+      "args": ["D:\\Python apps\\pyconstelaciones + Reports\\mcp_server.py"],
+      "cwd": "D:\\Python apps\\pyconstelaciones + Reports"
+    }
+  }
+}
+```
+
+### 2. Steps de configuración
+
+1. **Abre el archivo de configuración**
+   - En VS Code: `Ctrl+Shift+P` → "Preferences: Open User Settings (JSON)"
+   - En Claude Desktop: Abre el archivo según tu sistema (ver ubicación arriba)
+
+2. **Copia la configuración** correspondiente a tu herramienta
+
+3. **Actualiza las rutas** si tu proyecto está en una ubicación diferente:
+   ```
+   "D:\\Python apps\\pyconstelaciones + Reports" → tu-ruta-del-proyecto
+   ```
+
+4. **Reinicia la aplicación** (VS Code o Claude Desktop)
+
+5. **Comprueba la conexión** escribiendo un prompt en Copilot:
+   ```
+   "Qué modelos semánticos tengo cargados?"
+   ```
+
+### 3. Configuración de rutas de datos (opcional)
+
+Si quieres cambiar la ruta por defecto donde se guardan las bases de datos DuckDB:
+
+```json
+{
+  "mcpServers": {
+    "powerbi-semantic-model": {
+      "command": "...",
+      "args": ["..."],
+      "env": {
+        "MCP_DATA_PATH": "D:/mi-ruta-custom/mcpdata"
+      }
+    }
+  }
+}
+```
+
+### 4. Troubleshooting
+
+Si el MCP no conecta:
+
+1. **Verifica la ruta del Python venv** (debe existir el archivo)
+2. **Comprueba que `mcp_server.py` existe** en el directorio
+3. **Reinicia completamente** la aplicación (no solo reload)
+4. **Revisa los logs** en Claude Desktop (últimaa pestanya de las herramientas)
 
 ---
 

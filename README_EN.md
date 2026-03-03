@@ -2,6 +2,96 @@
 
 **[Español](README.md) | English**
 
+## 🔧 MCP Configuration in VS Code with GitHub Copilot
+
+To use the MCP directly from VS Code with GitHub Copilot, you need to configure the MCP server JSON file.
+
+### 1. Configuration files
+
+The MCP uses two main JSON files:
+
+#### a) MCP server configuration for Claude Desktop
+
+**Location by system:**
+- **Windows**: `%APPDATA%\\Claude\\claude_desktop_config.json`
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Linux**: `~/.config/Claude/claude_desktop_config.json`
+
+**Content:**
+```json
+{
+  "mcpServers": {
+    "powerbi-semantic-model": {
+      "command": "D:\\Python apps\\pyconstelaciones + Reports\\.venv\\Scripts\\python.exe",
+      "args": ["D:\\Python apps\\pyconstelaciones + Reports\\mcp_server.py"]
+    }
+  }
+}
+```
+
+#### b) Configuration for VS Code (GitHub Copilot extension)
+
+If you use VS Code with Copilot, add the configuration in VS Code's **settings.json**:
+
+```json
+{
+  "github.copilot.mcp.servers": {
+    "powerbi-semantic-model": {
+      "command": "python",
+      "args": ["D:\\Python apps\\pyconstelaciones + Reports\\mcp_server.py"],
+      "cwd": "D:\\Python apps\\pyconstelaciones + Reports"
+    }
+  }
+}
+```
+
+### 2. Configuration steps
+
+1. **Open the configuration file**
+   - In VS Code: `Ctrl+Shift+P` → "Preferences: Open User Settings (JSON)"
+   - In Claude Desktop: Open the file according to your system (see location above)
+
+2. **Copy the corresponding configuration** for your tool
+
+3. **Update the paths** if your project is in a different location:
+   ```
+   "D:\\Python apps\\pyconstelaciones + Reports" → your-project-path
+   ```
+
+4. **Restart the application** (VS Code or Claude Desktop)
+
+5. **Check the connection** by writing a prompt in Copilot:
+   ```
+   "What semantic models do I have loaded?"
+   ```
+
+### 3. Data path configuration (optional)
+
+If you want to change the default path where DuckDB databases are saved:
+
+```json
+{
+  "mcpServers": {
+    "powerbi-semantic-model": {
+      "command": "...",
+      "args": ["..."],
+      "env": {
+        "MCP_DATA_PATH": "D:/my-custom-path/mcpdata"
+      }
+    }
+  }
+}
+```
+
+### 4. Troubleshooting
+
+If the MCP doesn't connect:
+
+1. **Verify the Python venv path** (the file must exist)
+2. **Check that `mcp_server.py` exists** in the directory
+3. **Completely restart** the application (not just reload)
+4. **Review the logs** in Claude Desktop (last tab in the tools)
+
 ---
 
 Python library for programmatically manipulating Power BI semantic models (`.SemanticModel` and `.Report` files).
@@ -84,15 +174,23 @@ python scripts/inspect_report.py --report "D:/globalai/beacicd/informe 1.Report"
 ```
 
 #### 2.3 Create mockups, analyze field usage, and establish lineage
-```bash
-python scripts/mockup_report.py --report "D:/globalai/beacicd/informe 1.Report"
-python scripts/field_usage.py --report "D:/globalai/beacicd/informe 1.Report"
-python scripts/lineage.py --report "D:/globalai/beacicd/informe 1.Report"
+
+These steps are best performed through **prompts to GitHub Copilot or Claude**:
+
+```
+Example prompt 1: "Analyze the report in D:/globalai/beacicd/informe 1.Report and give me a summary of fields used"
+Example prompt 2: "Create an SVG mockup of the report pages"
+Example prompt 3: "Establish the lineage between report informe 1 and model semanticAdventureworks"
 ```
 
+The MCP will handle these requests automatically.
+
 #### 2.4 Generate new models based on report needs
-```bash
-python scripts/create_subset_model.py --model "D:/globalai/DemoADN/semanticAdventureworks.SemanticModel" --columns-used "columns_used.json" --output "D:/globalai/DemoADN/OptimizedModel.SemanticModel"
+
+Also via prompts:
+
+```
+Example prompt: "Create an optimized submodel for report informe 1 that only includes used tables and columns"
 ```
 
 ---
