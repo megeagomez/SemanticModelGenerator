@@ -84,24 +84,10 @@ python scripts/inspect_model.py --model "D:/globalai/DemoADN/semanticAdventurewo
 python scripts/inspect_report.py --report "D:/globalai/beacicd/informe 1.Report"
 ```
 
-#### 2.3 Crear mockups, analizar uso de campos y linaje
 
-Estos pasos se realizan mejor a través de **prompts a GitHub Copilot o Claude**:
-
-```
-Prompt ejemplo 1: "Analiza el reporte en D:/globalai/beacicd/informe 1.Report y dame un resumen de campos usados"
-Prompt ejemplo 2: "Crea un mockup SVG de las páginas del reporte"
-Prompt ejemplo 3: "Establece el linaje entre el reporte informe 1 y el modelo semanticAdventureworks"
-```
-
-El MCP se encargará de procesar estas solicitudes automáticamente.
-
-#### 2.4 Generar nuevos modelos según necesidades de informes
-
-También mediante prompts:
-
-```
-Prompt ejemplo: "Crea un submodelo optimizado para el reporte informe 1 que solo incluya las tablas y columnas utilizadas"
+#### 2.3 Generar nuevos modelos según necesidades de informes
+```bash
+python scripts/create_subset_model.py --model "D:/globalai/DemoADN/semanticAdventureworks.SemanticModel" --columns-used "columns_used.json" --output "D:/globalai/DemoADN/OptimizedModel.SemanticModel"
 ```
 
 ---
