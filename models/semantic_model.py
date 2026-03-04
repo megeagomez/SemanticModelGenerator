@@ -1520,6 +1520,7 @@ class SemanticModel:
         connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_semantic_model_column_id START 1")
         connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_semantic_model_measure_id START 1")
         connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_semantic_model_relationship_id START 1")
+        connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_semantic_model_partition_id START 1")
         
         # Crear tabla semantic_model (sin dropear, para acumular múltiples modelos)
         connection.execute("""
@@ -1712,6 +1713,9 @@ class SemanticModel:
                     measure.format_string,
                     measure.is_hidden
                 ])
+            
+            # Insertar particiones (delegado a la clase Table)
+            table.save_partitions_to_database(connection, semantic_model_id)
         
         # Insertar relaciones
         for relationship in self.relationships:

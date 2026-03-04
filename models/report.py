@@ -1055,6 +1055,18 @@ class clsReport(FilterMixin):
                         visual_data = {}
                 else:
                     visual_data = visual_config
+                
+                # En formato legacy, la posición está en el visualContainer, no dentro del config
+                # Inyectar position para que Visual.__init__ la encuentre
+                if 'position' not in visual_data:
+                    visual_data['position'] = {
+                        "x": visual_container.get('x', 0),
+                        "y": visual_container.get('y', 0),
+                        "width": visual_container.get('width', 100),
+                        "height": visual_container.get('height', 100),
+                        "z": visual_container.get('z', 0),
+                        "tabOrder": visual_container.get('tabOrder', 0),
+                    }
                 # Buscar mapeo de alias a entidad real en prototypeQuery.From
                 alias_map = {}
                 proto_query = visual_data.get('prototypeQuery')
@@ -1342,7 +1354,7 @@ class clsReport(FilterMixin):
         # CREAR TODAS LAS TABLAS PRIMERO (antes de hacer DELETEs)
         
         # Crear tabla report_page (drop y recrear para incluir visibility)
-        connection.execute("DROP TABLE IF EXISTS report_page")
+        #connection.execute("DROP TABLE IF EXISTS report_page")
         connection.execute("""
             CREATE TABLE IF NOT EXISTS report_page (
                 id INTEGER PRIMARY KEY DEFAULT nextval('seq_report_page_id'),

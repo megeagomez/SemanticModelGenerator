@@ -15,6 +15,7 @@ from mcp.types import Tool, TextContent
 import mcp.server.stdio
 
 from models import SemanticModel, clsReport
+from models.report import Page
 
 
 # Configuración
@@ -648,6 +649,23 @@ class PowerBIModelServer:
                         "required": ["query"]
                     }
                 ),
+                Tool(
+                    name="generate_report_documentation",
+                    description="Genera documentación HTML completa de un informe Power BI (o de todos) desde la BD DuckDB. "
+                                "Incluye: cabecera, KPIs, informes asociados, detalle por página con SVG mockup, "
+                                "tablas/columnas/métricas por página, código DAX de métricas, e inventario de tablas con código M. "
+                                "Los ficheros HTML se guardan en la carpeta output dentro del directorio configurado con set_models_path.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "report_name": {
+                                "type": "string",
+                                "description": "Nombre del informe a documentar (tal como aparece en la BD). Si no se indica, se generan todos."
+                            }
+                        },
+                        "required": []
+                    }
+                ),
             ]
         
         @self.server.call_tool()
@@ -749,6 +767,11 @@ class PowerBIModelServer:
             elif name == "querydb":
                 return await self._query_db(arguments["query"])
             
+            elif name == "generate_report_documentation":
+                return await self._generate_report_documentation(
+                    arguments.get("report_name")
+                )
+            
             else:
                 raise ValueError(f"Unknown tool: {name}")
     
@@ -796,8 +819,92 @@ class PowerBIModelServer:
         except Exception as e:
             return False, [], str(e)
     
+    async def _generate_report_documentation(self, report_name: str = None) -> list[TextContent]:
+        """Genera documentación HTML de informe(s) Power BI desde DuckDB.
+        
+        Guarda los HTML en self.models_path / 'output'.
+        Si report_name es None, genera para todos los informes.
+        """
+        if not self.default_db_path.exists():
+            return [TextContent(type="text", text=(
+                f"❌ No se encontró la base de datos: {self.default_db_path}\n\n"
+                f"Configura la ruta con 'set_models_path' o 'default_db' primero."
+            ))]
+
+        try:
+            import duckdb
+            from scripts.documenta_report import generate_report_html, _get_all_report_names
+        except ImportError as e:
+            return [TextContent(type="text", text=f"❌ Error de importación: {e}")]
+
+        output_dir = self.models_path / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            con = duckdb.connect(str(self.default_db_path), read_only=True)
+
+            # Determinar informes a procesar
+            if report_name:
+                report_names = [report_name]
+            else:
+                report_names = _get_all_report_names(con)
+                if not report_names:
+                    con.close()
+                    return [TextContent(type="text", text="No hay informes en la base de datos.")]
+
+            generated = []
+            errors = []
+            generated_paths = set()
+
+            for name in report_names:
+                try:
+                    html_output = generate_report_html(con, name)
+                    safe_name = "".join(
+                        c if c.isalnum() or c in " _-" else "_" for c in name
+                    ).strip()
+                    out_path = output_dir / f"{safe_name}.html"
+                    # Desambiguar colisiones
+                    counter = 2
+                    while str(out_path) in generated_paths:
+                        out_path = output_dir / f"{safe_name}_{counter}.html"
+                        counter += 1
+                    generated_paths.add(str(out_path))
+                    out_path.write_text(html_output, encoding="utf-8")
+                    generated.append((name, str(out_path)))
+                except Exception as e:
+                    errors.append((name, str(e)))
+
+            con.close()
+
+            # Formatear resultado
+            result_parts = []
+            result_parts.append(f"✅ Documentación generada: {len(generated)} informe(s)")
+            result_parts.append(f"📁 Carpeta de salida: {output_dir}\n")
+
+            if len(generated) <= 20:
+                for rname, rpath in generated:
+                    result_parts.append(f"  • {rname}  →  {rpath}")
+            else:
+                for rname, rpath in generated[:10]:
+                    result_parts.append(f"  • {rname}  →  {rpath}")
+                result_parts.append(f"  ... y {len(generated) - 10} más")
+
+            if errors:
+                result_parts.append(f"\n⚠️ Errores en {len(errors)} informe(s):")
+                for rname, err in errors:
+                    result_parts.append(f"  ✗ {rname}: {err}")
+
+            return [TextContent(type="text", text="\n".join(result_parts))]
+
+        except Exception as e:
+            return [TextContent(type="text", text=f"❌ Error generando documentación: {e}")]
+
     async def _set_models_path(self, path_str: str) -> list[TextContent]:
-        """Actualiza el directorio base de modelos y reportes."""
+        """Actualiza el directorio base de modelos y reportes.
+        
+        También actualiza data_path, default_db_name y default_db_path
+        para que apunten coherentemente a la nueva ubicación.
+        """
         new_path = Path(path_str)
         # Permitir relativo al cwd donde corre el servidor
         if not new_path.is_absolute():
@@ -806,7 +913,27 @@ class PowerBIModelServer:
             return [TextContent(type="text", text=f"Error: la ruta especificada no existe o no es un directorio: {new_path}")]
 
         self.models_path = new_path
-        return [TextContent(type="text", text=f"✅ Directorio de modelos actualizado a: {self.models_path}")]
+        # Actualizar data_path al directorio padre y default_db_name al nombre de la carpeta
+        self.data_path = new_path.parent
+        self.default_db_name = new_path.name
+        # Buscar un .duckdb en la carpeta padre que coincida con el nombre
+        candidate_db = self.data_path / f"{self.default_db_name}.duckdb"
+        if candidate_db.exists():
+            self.default_db_path = candidate_db
+        else:
+            # Buscar cualquier .duckdb en data_path
+            duckdb_files = list(self.data_path.glob("*.duckdb"))
+            if duckdb_files:
+                self.default_db_path = duckdb_files[0]
+                self.default_db_name = duckdb_files[0].stem
+            else:
+                self.default_db_path = candidate_db  # mantener la ruta esperada aunque no exista
+        
+        return [TextContent(type="text", text=(
+            f"✅ Directorio de modelos actualizado a: {self.models_path}\n"
+            f"📁 Data path: {self.data_path}\n"
+            f"💾 BD por defecto: {self.default_db_path}"
+        ))]
     
     async def _get_model_info(self, model_name: str) -> list[TextContent]:
         """Obtiene información de un modelo del workspace actual"""
@@ -971,30 +1098,113 @@ class PowerBIModelServer:
         
         return [TextContent(type="text", text=result)]
     
+    def _generate_svg_from_db(self, report_name: str, page_name: Optional[str] = None) -> tuple[bool, Optional[object], str]:
+        """Intenta generar SVG usando datos de DuckDB.
+        
+        Returns:
+            (success, target_page, error_message)
+        """
+        if not self.default_db_path.exists():
+            return False, None, "BD no disponible"
+        
+        try:
+            import duckdb
+            connection = duckdb.connect(str(self.default_db_path), read_only=True)
+            
+            # Buscar página en la BD
+            if page_name:
+                page_row = connection.execute(
+                    "SELECT name, display_name, width, height FROM report_page WHERE report_name = ? AND (name = ? OR display_name = ?)",
+                    [report_name, page_name, page_name]
+                ).fetchone()
+            else:
+                page_row = connection.execute(
+                    "SELECT name, display_name, width, height FROM report_page WHERE report_name = ? LIMIT 1",
+                    [report_name]
+                ).fetchone()
+            
+            if not page_row:
+                connection.close()
+                return False, None, f"Página no encontrada en DuckDB para reporte '{report_name}'"
+            
+            pg_name, pg_display_name, pg_width, pg_height = page_row
+            
+            # Obtener visuales de la página
+            visuals_rows = connection.execute(
+                """SELECT name, visual_type, position_x, position_y, position_width, position_height, text_content 
+                   FROM report_visual 
+                   WHERE report_name = ? AND page_name = ?""",
+                [report_name, pg_name]
+            ).fetchall()
+            connection.close()
+            
+            # Construir Page ligera con los datos de la BD (sin leer del filesystem)
+            from types import SimpleNamespace
+            
+            target_page = Page.__new__(Page)
+            target_page.name = pg_name
+            target_page.displayName = pg_display_name
+            target_page.width = pg_width
+            target_page.height = pg_height
+            target_page.visuals = []
+            
+            for row in visuals_rows:
+                v = SimpleNamespace(
+                    name=row[0],
+                    visualType=row[1],
+                    position={
+                        'x': row[2] or 0,
+                        'y': row[3] or 0,
+                        'width': row[4] or 200,
+                        'height': row[5] or 160
+                    },
+                    text=row[6],
+                    columns_used=[],
+                    measures_used=[],
+                    filters=[],
+                    navigationTarget=None
+                )
+                target_page.visuals.append(v)
+            
+            return True, target_page, ""
+        except Exception as e:
+            return False, None, f"Error al consultar DuckDB: {e}"
+
     async def _generate_report_svg(self, report_name: str, page_name: Optional[str] = None, save_to_file: bool = False) -> list[TextContent]:
-        """Genera una visualización SVG de una página de reporte"""
-        report_path = self.models_path / report_name
+        """Genera una visualización SVG de una página de reporte.
         
-        if not report_path.exists():
-            return [TextContent(type="text", text=f"Error: Reporte '{report_name}' no encontrado")]
-        
-        # Parsear reporte
-        report = clsReport(str(report_path))
-        
-        if not report.pages:
-            return [TextContent(type="text", text=f"Error: El reporte no tiene páginas")]
-        
-        # Buscar página
+        Primero intenta usar DuckDB para obtener los datos de la página y sus visuales.
+        Si no hay BD disponible o el reporte no está en la BD, cae al sistema de archivos.
+        """
         target_page = None
-        if page_name:
-            for page in report.pages:
-                if page.name == page_name or (page.displayName and page.displayName == page_name):
-                    target_page = page
-                    break
-            if not target_page:
-                return [TextContent(type="text", text=f"Error: Página '{page_name}' no encontrada")]
+        source = "filesystem"
+        
+        # 1. Intentar desde DuckDB
+        db_ok, db_page, db_msg = self._generate_svg_from_db(report_name, page_name)
+        if db_ok and db_page:
+            target_page = db_page
+            source = "DuckDB"
         else:
-            target_page = report.pages[0]
+            # 2. Fallback: leer del sistema de archivos
+            report_path = self.models_path / report_name
+            
+            if not report_path.exists():
+                return [TextContent(type="text", text=f"Error: Reporte '{report_name}' no encontrado ni en DuckDB ni en el filesystem.\nDuckDB: {db_msg}")]
+            
+            report = clsReport(str(report_path))
+            
+            if not report.pages:
+                return [TextContent(type="text", text=f"Error: El reporte no tiene páginas")]
+            
+            if page_name:
+                for page in report.pages:
+                    if page.name == page_name or (page.displayName and page.displayName == page_name):
+                        target_page = page
+                        break
+                if not target_page:
+                    return [TextContent(type="text", text=f"Error: Página '{page_name}' no encontrada")]
+            else:
+                target_page = report.pages[0]
         
         # Generar SVG
         svg_content = target_page.generate_svg_page()
@@ -1006,6 +1216,7 @@ class PowerBIModelServer:
             
             display_name = target_page.displayName if target_page.displayName else target_page.name
             result = f"✅ SVG generado y guardado en:\n{output_file}\n\n"
+            result += f"📊 Fuente de datos: {source}\n"
             result += f"Página: {display_name}\n"
             result += f"Visuales renderizados: {len(target_page.visuals)}\n"
             result += f"Tamaño del SVG: {len(svg_content)} caracteres\n\n"
@@ -1014,6 +1225,7 @@ class PowerBIModelServer:
         else:
             display_name = target_page.displayName if target_page.displayName else target_page.name
             result = f"=== SVG de la Página: {display_name} ===\n\n"
+            result += f"📊 Fuente de datos: {source}\n"
             result += f"Visuales renderizados: {len(target_page.visuals)}\n"
             result += f"Tamaño: {len(svg_content)} caracteres\n\n"
             result += svg_content

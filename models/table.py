@@ -310,6 +310,49 @@ class Table:
         
         return partitions
     
+    def save_partitions_to_database(self, connection, semantic_model_id: int):
+        """Guarda las particiones de esta tabla en la tabla semantic_model_partitions de DuckDB.
+        
+        Args:
+            connection: Conexión DuckDB (duckdb.DuckDBPyConnection)
+            semantic_model_id: ID interno del modelo semántico en la BD
+        """
+        # Crear secuencia y tabla si no existen
+        connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_semantic_model_partition_id START 1")
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS semantic_model_partitions (
+                id INTEGER PRIMARY KEY DEFAULT nextval('seq_semantic_model_partition_id'),
+                semantic_model_id INTEGER NOT NULL,
+                table_name VARCHAR NOT NULL,
+                partition_name VARCHAR NOT NULL,
+                source_type VARCHAR,
+                mode VARCHAR,
+                source_expression TEXT,
+                created_at TIMESTAMP DEFAULT now(),
+                FOREIGN KEY(semantic_model_id) REFERENCES semantic_model(id)
+            )
+        """)
+        
+        # Limpiar particiones antiguas de esta tabla y modelo
+        connection.execute(
+            "DELETE FROM semantic_model_partitions WHERE semantic_model_id = ? AND table_name = ?",
+            [semantic_model_id, self.name]
+        )
+        
+        # Insertar cada partición
+        for partition in self.partitions:
+            connection.execute("""
+                INSERT INTO semantic_model_partitions (semantic_model_id, table_name, partition_name, source_type, mode, source_expression)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, [
+                semantic_model_id,
+                self.name,
+                partition.name,
+                partition.source_type,
+                partition.mode,
+                partition.source_expression
+            ])
+
     def save_to_file(self, filepath: Path):
         """Guarda la tabla a un archivo .tmdl"""
         with open(filepath, 'w', encoding='utf-8') as f:
