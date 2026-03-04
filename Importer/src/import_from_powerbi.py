@@ -240,7 +240,7 @@ class PowerBIImporter:
     
             
 
-    def import_from_powerbi(self, item_id: str = None, destination_path: str = "data", WorkspaceName: str = None, db_name: str = "powerbi"):
+    def import_from_powerbi(self, item_id: str = None, destination_path: str = "data", WorkspaceName: str = None, db_name: str = "powerbi", ConnectAndDownload: bool = True):
         """
         Importa todos los modelos semánticos y reports de un workspace de Power BI, identificado por nombre.
         Si WorkspaceName es None, se usará el primer workspace disponible.
@@ -250,33 +250,42 @@ class PowerBIImporter:
             destination_path: Ruta base para descargar archivos (default: "data")
             WorkspaceName: Nombre del workspace a importar
             db_name: Nombre de la base de datos DuckDB en carpeta data (default: "powerbi")
+            ConnectAndDownload: Si True (default), se conecta a Power BI y descarga.
+                                Si False, solo parsea y persiste archivos ya descargados localmente.
         """
-        # 0. Login si es necesario
-        if not self.fabric_item_downloader.access_token:
-            if not self.fabric_item_downloader.authenticate():
-                raise Exception("No se pudo autenticar con Power BI.")
-
-        # 1. Listar workspaces
-        workspaces = self.fabric_item_downloader.list_workspaces()
-        if not workspaces:
-            raise Exception("No se encontraron workspaces disponibles.")
-
-        # 2. Buscar workspace por nombre
-        ws = None
-        # Prioridad: parámetro WorkspaceName > self.workspace_name > primero disponible
         ws_name = WorkspaceName or self.workspace_name
-        if ws_name:
-            for w in workspaces:
-                if w.get('displayName', '').lower() == ws_name.lower():
-                    ws = w
-                    break
-            if not ws:
-                raise Exception(f"No se encontró el workspace con nombre: {ws_name}")
-        else:
-            ws = workspaces[0]
+        workspace_id = "local"
+        workspace_name = ws_name or "local"
+        workspaces = []
+        
+        if ConnectAndDownload:
+            # 0. Login si es necesario
+            if not self.fabric_item_downloader.access_token:
+                if not self.fabric_item_downloader.authenticate():
+                    raise Exception("No se pudo autenticar con Power BI.")
 
-        workspace_id = ws['id']
-        workspace_name = ws.get('displayName', workspace_id)
+            # 1. Listar workspaces
+            workspaces = self.fabric_item_downloader.list_workspaces()
+            if not workspaces:
+                raise Exception("No se encontraron workspaces disponibles.")
+
+            # 2. Buscar workspace por nombre
+            ws = None
+            if ws_name:
+                for w in workspaces:
+                    if w.get('displayName', '').lower() == ws_name.lower():
+                        ws = w
+                        break
+                if not ws:
+                    raise Exception(f"No se encontró el workspace con nombre: {ws_name}")
+            else:
+                ws = workspaces[0]
+
+            workspace_id = ws['id']
+            workspace_name = ws.get('displayName', workspace_id)
+        else:
+            logger.info(f"⏭️ Modo local: se omite conexión y descarga de Power BI")
+            print(f"⏭️ Modo local: procesando archivos ya descargados en {destination_path}")
 
         # Archivo de información global
         info_path = os.path.join(destination_path, "powerbiinfo.json")
@@ -287,7 +296,7 @@ class PowerBIImporter:
             powerbiinfo = {"workspaces": []}
 
         # Buscar o crear entrada de workspace
-        ws_entry = next((w for w in powerbiinfo["workspaces"] if w["id"] == workspace_id), None)
+        ws_entry = next((w for w in powerbiinfo["workspaces"] if w.get("id") == workspace_id or w.get("name", "").lower() == workspace_name.lower()), None)
         if not ws_entry:
             ws_entry = {"id": workspace_id, "name": workspace_name, "reports": [], "semantic_models": []}
             powerbiinfo["workspaces"].append(ws_entry)
@@ -300,91 +309,162 @@ class PowerBIImporter:
         conn = duckdb.connect(db_path)
         logger.info(f"📊 Base de datos DuckDB creada en: {db_path}")
         
-        # GUARDAR WORKSPACES EN LA BD (paso previo orquestado)
-        logger.info(f"💾 Guardando información de workspaces en BD...")
-        for ws_data in workspaces:
-            try:
-                workspace_obj = Workspace.from_powerbi_response(ws_data)
-                workspace_obj.save_to_database(conn)
-                logger.info(f"✅ Workspace guardado: {workspace_obj.displayName}")
-            except Exception as e:
-                logger.warning(f"⚠️ No se pudo guardar workspace {ws_data.get('displayName')}: {e}")
+        if ConnectAndDownload:
+            # GUARDAR WORKSPACES EN LA BD (paso previo orquestado)
+            logger.info(f"💾 Guardando información de workspaces en BD...")
+            for ws_data in workspaces:
+                try:
+                    workspace_obj = Workspace.from_powerbi_response(ws_data)
+                    workspace_obj.save_to_database(conn)
+                    logger.info(f"✅ Workspace guardado: {workspace_obj.displayName}")
+                except Exception as e:
+                    logger.warning(f"⚠️ No se pudo guardar workspace {ws_data.get('displayName')}: {e}")
+            
+            logger.info(f"✅ Workspaces guardados en BD")
         
-        logger.info(f"✅ Workspaces guardados en BD")
-        
-        # Descargar modelos semánticos y parsear/serializar
-        semantic_models = self.fabric_item_downloader.list_semantic_models(workspace_id)
-        ws_entry["semantic_models"] = []
         output_dir = os.path.join("output")
         os.makedirs(output_dir, exist_ok=True)
-        
-        logger.info(f"📥 Procesando {len(semantic_models)} modelos semánticos...")
-        for model in semantic_models:
-            model_id = model.get("id")
-            model_name = model.get("displayName", model_id)
-            logger.info(f"📥 Descargando modelo: {model_name}...")
-            ws_entry["semantic_models"].append({"id": model_id, "name": model_name})
-            self.fabric_item_downloader.download_semantic_model(workspace_id, model_id, output_folder=destination_path)
-            # Parsear y serializar
-            # Los archivos se descargan en formato: {destination_path}/{workspace_name}/{proyecto}.SemanticModel/
-            safe_workspace_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in workspace_name.strip())
-            safe_model_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in model_name.strip())
-            model_base_path = os.path.join(destination_path, safe_workspace_name, f"{safe_model_name}.SemanticModel")
-            logger.info(f"🔍 Buscando archivos del modelo en: {model_base_path}")
-            if os.path.exists(model_base_path):
-                try:
-                    logger.info(f"✅ Parseando modelo {model_name}...")
-                    semantic_model_obj = SemanticModel(model_base_path, semantic_model_id=model_id, workspace_id=workspace_id)
-                    semantic_model_obj.load_from_directory(Path(model_base_path))
-                    semantic_model_obj.save_to_database(conn)
-                    #get_calc_dependencies_paginated(self.fabric_item_downloader, model_id, model_name)
-                    with open(os.path.join(output_dir, f"{workspace_name}__{model_name}__semantic_model.pkl"), "wb") as pf:
-                        pickle.dump(semantic_model_obj, pf)
-                    logger.info(f"✅ Modelo {model_name} procesado correctamente")
-                except Exception as e:
-                    logger.error(f"❌ Error parseando/serializando modelo {model_name}: {e}")
-                    print(f"Error parseando/serializando modelo {model_name}: {e}")
-            else:
-                logger.error(f"❌ Carpeta del modelo no encontrada: {model_base_path}")
-                print(f"⚠️ Carpeta del modelo no encontrada: {model_base_path}")
-        
-        # Consultar y guardar CALC_DEPENDENCIES (solo si workspace es Premium/PPU)
-        # NOTA: DISCOVER_CALC_DEPENDENCIES es un DMV y actualmente no está disponible
-        # a través del REST API ExecuteQueries (solo acepta DAX queries)
-        # Esta funcionalidad queda pendiente para integración futura via XMLA endpoint
-        
-        print(f"⏭️  DISCOVER_CALC_DEPENDENCIES no disponible en workspace estándar (requiere Premium/PPU con XMLA)")
-
-        # Descargar reports y parsear/serializar
-        reports = self.fabric_item_downloader.list_reports(workspace_id)
+        ws_entry["semantic_models"] = []
         ws_entry["reports"] = []
-        logger.info(f"📥 Procesando {len(reports)} reportes...")
-        for report in reports:
-            report_id = report.get("id")
-            report_name = report.get("displayName", report_id)
-            logger.info(f"📥 Descargando reporte: {report_name}...")
-            ws_entry["reports"].append({"id": report_id, "name": report_name})
-            self.fabric_item_downloader.download(workspace_id, report_id, output_folder=destination_path)
-            # Parsear y serializar
-            # Los archivos se descargan en formato: {destination_path}/{workspace_name}/{proyecto}.Report/
-            safe_workspace_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in workspace_name.strip())
-            safe_report_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in report_name.strip())
-            report_folder = os.path.join(destination_path, safe_workspace_name, f"{safe_report_name}.Report")
-            logger.info(f"🔍 Buscando archivos del reporte en: {report_folder}")
-            if os.path.exists(report_folder):
-                try:
-                    logger.info(f"✅ Parseando reporte {report_name}...")
-                    report_obj = clsReport(report_folder, report_id=report_id, workspace_id=workspace_id, report_name=report_name)
-                    report_obj.save_to_database(conn)
-                    with open(os.path.join(output_dir, f"{workspace_name}__{report_name}__report.pkl"), "wb") as pf:
-                        pickle.dump(report_obj, pf)
-                    logger.info(f"✅ Reporte {report_name} procesado correctamente")
-                except Exception as e:
-                    logger.error(f"❌ Error parseando/serializando report {report_name}: {e}")
-                    print(f"Error parseando/serializando report {report_name}: {e}")
-            else:
-                logger.error(f"❌ Carpeta del reporte no encontrada: {report_folder}")
-                print(f"⚠️ Carpeta del reporte no encontrada: {report_folder}")
+        
+        if ConnectAndDownload:
+            # Descargar modelos semánticos y parsear/serializar
+            semantic_models = self.fabric_item_downloader.list_semantic_models(workspace_id)
+            
+            logger.info(f"📥 Procesando {len(semantic_models)} modelos semánticos...")
+            for model in semantic_models:
+                model_id = model.get("id")
+                model_name = model.get("displayName", model_id)
+                logger.info(f"📥 Descargando modelo: {model_name}...")
+                ws_entry["semantic_models"].append({"id": model_id, "name": model_name})
+                self.fabric_item_downloader.download_semantic_model(workspace_id, model_id, output_folder=destination_path)
+                # Parsear y serializar
+                safe_workspace_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in workspace_name.strip())
+                safe_model_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in model_name.strip())
+                model_base_path = os.path.join(destination_path, safe_workspace_name, f"{safe_model_name}.SemanticModel")
+                logger.info(f"🔍 Buscando archivos del modelo en: {model_base_path}")
+                if os.path.exists(model_base_path):
+                    try:
+                        logger.info(f"✅ Parseando modelo {model_name}...")
+                        semantic_model_obj = SemanticModel(model_base_path, semantic_model_id=model_id, workspace_id=workspace_id)
+                        semantic_model_obj.load_from_directory(Path(model_base_path))
+                        semantic_model_obj.save_to_database(conn)
+                        #get_calc_dependencies_paginated(self.fabric_item_downloader, model_id, model_name)
+                        with open(os.path.join(output_dir, f"{workspace_name}__{model_name}__semantic_model.pkl"), "wb") as pf:
+                            pickle.dump(semantic_model_obj, pf)
+                        logger.info(f"✅ Modelo {model_name} procesado correctamente")
+                    except Exception as e:
+                        logger.error(f"❌ Error parseando/serializando modelo {model_name}: {e}")
+                        print(f"Error parseando/serializando modelo {model_name}: {e}")
+                else:
+                    logger.error(f"❌ Carpeta del modelo no encontrada: {model_base_path}")
+                    print(f"⚠️ Carpeta del modelo no encontrada: {model_base_path}")
+        
+            # Consultar y guardar CALC_DEPENDENCIES (solo si workspace es Premium/PPU)
+            # NOTA: DISCOVER_CALC_DEPENDENCIES es un DMV y actualmente no está disponible
+            # a través del REST API ExecuteQueries (solo acepta DAX queries)
+            # Esta funcionalidad queda pendiente para integración futura via XMLA endpoint
+            
+            print(f"⏭️  DISCOVER_CALC_DEPENDENCIES no disponible en workspace estándar (requiere Premium/PPU con XMLA)")
+
+            # Descargar reports y parsear/serializar
+            reports = self.fabric_item_downloader.list_reports(workspace_id)
+            logger.info(f"📥 Procesando {len(reports)} reportes...")
+            for report in reports:
+                report_id = report.get("id")
+                report_name = report.get("displayName", report_id)
+                logger.info(f"📥 Descargando reporte: {report_name}...")
+                ws_entry["reports"].append({"id": report_id, "name": report_name})
+                self.fabric_item_downloader.download(workspace_id, report_id, output_folder=destination_path)
+                # Parsear y serializar
+                safe_workspace_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in workspace_name.strip())
+                safe_report_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in report_name.strip())
+                report_folder = os.path.join(destination_path, safe_workspace_name, f"{safe_report_name}.Report")
+                logger.info(f"🔍 Buscando archivos del reporte en: {report_folder}")
+                if os.path.exists(report_folder):
+                    try:
+                        logger.info(f"✅ Parseando reporte {report_name}...")
+                        report_obj = clsReport(report_folder, report_id=report_id, workspace_id=workspace_id, report_name=report_name)
+                        report_obj.save_to_database(conn)
+                        with open(os.path.join(output_dir, f"{workspace_name}__{report_name}__report.pkl"), "wb") as pf:
+                            pickle.dump(report_obj, pf)
+                        logger.info(f"✅ Reporte {report_name} procesado correctamente")
+                    except Exception as e:
+                        logger.error(f"❌ Error parseando/serializando report {report_name}: {e}")
+                        print(f"Error parseando/serializando report {report_name}: {e}")
+                else:
+                    logger.error(f"❌ Carpeta del reporte no encontrada: {report_folder}")
+                    print(f"⚠️ Carpeta del reporte no encontrada: {report_folder}")
+        else:
+            # Modo local: procesar carpetas .SemanticModel y .Report ya descargadas
+            # Filtrar por la carpeta que coincide con el nombre del workspace
+            if not ws_name:
+                raise Exception("En modo local (ConnectAndDownload=False), el parámetro workspace es obligatorio.")
+            
+            # Buscar workspace en la tabla workspaces de la BD para obtener el id real
+            try:
+                ws_row = conn.execute(
+                    "SELECT id, displayName FROM workspaces WHERE displayName = ?", [ws_name]
+                ).fetchone()
+                if ws_row:
+                    workspace_id = ws_row[0]
+                    workspace_name = ws_row[1]
+                    logger.info(f"✅ Workspace encontrado en BD: {workspace_name} (id={workspace_id})")
+                else:
+                    logger.warning(f"⚠️ Workspace '{ws_name}' no encontrado en la tabla workspaces. Se usará id='local'.")
+                    workspace_id = "local"
+                    workspace_name = ws_name
+            except Exception as e:
+                logger.warning(f"⚠️ No se pudo consultar tabla workspaces: {e}. Se usará id='local'.")
+                workspace_id = "local"
+                workspace_name = ws_name
+            
+            # Actualizar ws_entry con los datos reales
+            ws_entry["id"] = workspace_id
+            ws_entry["name"] = workspace_name
+            
+            # Buscar directamente en la carpeta del workspace: destination_path/workspace_name/
+            ws_folder = os.path.join(destination_path, workspace_name)
+            if not os.path.isdir(ws_folder):
+                raise Exception(f"No se encontró la carpeta del workspace: {ws_folder}")
+            
+            logger.info(f"🔍 Buscando modelos y reportes en carpeta del workspace: {ws_folder}")
+            
+            for item_dir in os.listdir(ws_folder):
+                item_path = os.path.join(ws_folder, item_dir)
+                if not os.path.isdir(item_path):
+                    continue
+                
+                if item_dir.endswith(".SemanticModel"):
+                    model_name = item_dir.replace(".SemanticModel", "")
+                    model_id = f"local_{model_name}"
+                    logger.info(f"✅ Parseando modelo local: {model_name} en {item_path}")
+                    ws_entry["semantic_models"].append({"id": model_id, "name": model_name})
+                    try:
+                        semantic_model_obj = SemanticModel(item_path, semantic_model_id=model_id, workspace_id=workspace_id)
+                        semantic_model_obj.load_from_directory(Path(item_path))
+                        semantic_model_obj.save_to_database(conn)
+                        with open(os.path.join(output_dir, f"{workspace_name}__{model_name}__semantic_model.pkl"), "wb") as pf:
+                            pickle.dump(semantic_model_obj, pf)
+                        logger.info(f"✅ Modelo {model_name} procesado correctamente")
+                    except Exception as e:
+                        logger.error(f"❌ Error parseando modelo local {model_name}: {e}")
+                        print(f"Error parseando modelo local {model_name}: {e}")
+                
+                elif item_dir.endswith(".Report"):
+                    report_name = item_dir.replace(".Report", "")
+                    report_id = f"local_{report_name}"
+                    logger.info(f"✅ Parseando reporte local: {report_name} en {item_path}")
+                    ws_entry["reports"].append({"id": report_id, "name": report_name})
+                    try:
+                        report_obj = clsReport(item_path, report_id=report_id, workspace_id=workspace_id, report_name=report_name)
+                        report_obj.save_to_database(conn)
+                        with open(os.path.join(output_dir, f"{workspace_name}__{report_name}__report.pkl"), "wb") as pf:
+                            pickle.dump(report_obj, pf)
+                        logger.info(f"✅ Reporte {report_name} procesado correctamente")
+                    except Exception as e:
+                        logger.error(f"❌ Error parseando reporte local {report_name}: {e}")
+                        print(f"Error parseando reporte local {report_name}: {e}")
 
         # Asegurar que la tabla de dependencias DAX siempre existe (aunque vacía)
         DaxTokenizer.ensure_dependencies_table(conn)
