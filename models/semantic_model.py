@@ -59,10 +59,23 @@ class SemanticModel:
     Mantiene la estructura de carpetas y archivos originales.
     """
     
-    def __init__(self, base_path: str, semantic_model_id: str = None, workspace_id: str = None):
-        self.base_path = Path(base_path)
-        self.semantic_model_id = semantic_model_id  # ID del modelo semántico desde Microsoft Fabric
-        self.workspace_id = workspace_id  # ID del workspace desde Microsoft Fabric
+    def __init__(self, base_path_or_con, name=None):
+        # Si es una conexión DuckDB, inicializa desde la BD
+        import duckdb
+        if isinstance(base_path_or_con, duckdb.DuckDBPyConnection):
+            self.con = base_path_or_con
+            self.name = name
+            # Busca el id del modelo
+            row = self.con.execute("SELECT id FROM semantic_model WHERE name = ?", [self.name]).fetchone()
+            self.semantic_model_id = row[0] if row else None
+            # Puedes cargar aquí más datos si lo necesitas
+        else:
+            # Retrocompatibilidad: inicializa desde path
+            self.base_path = Path(base_path_or_con)
+            self.name = name or self.base_path.stem
+            self.con = None
+            self.semantic_model_id = None
+            # ...carga desde archivos como antes...
         self.model: Optional[Model] = None
         self.relationships: List[Relationship] = []
         self.tables: List[Table] = []
@@ -328,7 +341,7 @@ class SemanticModel:
                     final_tables.add(table_name)  # IMPORTANTE: Agregar a final_tables también
                     
                     # Auto-crear especificación de elementos para esta tabla
-                    # Solo incluir las columnas usadas en las medidas + columnas de relaciones
+                    # Solo incluir las columnas usadas en las medidas + luego se ajustarán con relaciones
                     if not table_elements:
                         table_elements = {}
                     if table_name not in table_elements:
