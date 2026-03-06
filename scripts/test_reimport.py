@@ -1,8 +1,3 @@
-"""
-test_reimport.py
-Reimporta tanto Reports como Modelos Semánticos desde carpetas locales a DuckDB,
-sin conectar a Power BI (ConnectAndDownload=False).
-"""
 import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../Importer/src')))

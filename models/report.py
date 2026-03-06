@@ -267,7 +267,7 @@ class Filter:
         filter_list = filter_config.get("filters", []) if filter_config else []
 
         for f in filter_list:
-            name = f.get("name", "Unnamed Filter")
+            name = f.get("name") or "Unnamed Filter"
             # PBIR usa "field", legacy usa "expression"
             field_container = f.get("field", f.get("expression", {}))
             
@@ -1592,6 +1592,11 @@ class clsReport(FilterMixin):
             # Filtros a nivel de visual
             for visual in page.visuals:
                 for filter_obj in visual.filters:
+                    if filter_obj.name is None:
+                        print(f"[WARN] Filtro visual ignorado: filter_name es None (visual: {visual.name}, page: {page.name})")
+                        print("[WARN] Código fuente del filtro:")
+                        print(filter_obj.__dict__)
+                        continue
                     connection.execute("""
                         INSERT INTO report_visual_filter (report_id, page_name, visual_name, filter_name, table_name, column_name, filter_description)
                         VALUES (?, ?, ?, ?, ?, ?, ?)

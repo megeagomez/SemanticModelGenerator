@@ -206,16 +206,189 @@ def render_model_tab(doc):
 
 
 def render_unused_tab(doc):
-    """Render the unused measures tab."""
-    unused = doc.get_unused_measures()
-    if unused:
-        st.warning(f"Se encontraron **{len(unused)}** medidas sin usar en ningún informe.")
-        for m in unused:
-            with st.expander(f"⚠️ [{m['table_name']}] {m['measure_name']}", expanded=False):
-                if m.get("expression"):
-                    st.code(m["expression"], language="dax")
+    """Render the full unused objects inventory tab."""
+    summary = doc.get_unused_summary()
+    n_cols = summary["total_unused_columns"]
+    n_meas = summary["total_unused_measures"]
+    n_tables = summary["total_unused_tables"]
+    total = n_cols + n_meas + n_tables
+
+    if total == 0:
+        st.success("✅ Todos los objetos del modelo están siendo usados en al menos un informe.")
+        return
+
+    # Overview KPI row
+    st.markdown(f"""
+    <div class="kpi-row">
+        <div class="kpi-box" style="background:#fff3e0;color:#e65100;">
+            <p class="kpi-value">⚠️ {n_tables}</p>
+            <p class="kpi-label">Tablas sin usar</p>
+        </div>
+        <div class="kpi-box" style="background:#fce4ec;color:#c62828;">
+            <p class="kpi-value">⚠️ {n_cols}</p>
+            <p class="kpi-label">Columnas sin usar</p>
+        </div>
+        <div class="kpi-box" style="background:#f3e5f5;color:#6a1b9a;">
+            <p class="kpi-value">⚠️ {n_meas}</p>
+            <p class="kpi-label">Medidas sin usar</p>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Unused tables ────────────────────────────────────────────
+    if summary["unused_tables"]:
+        st.markdown('<div class="section-header">📋 Tablas sin usar</div>', unsafe_allow_html=True)
+        for t in summary["unused_tables"]:
+            st.markdown(f"- `{t['table_name']}`" + (" _(oculta)_" if t.get("is_hidden") else ""))
+
+    # ── Unused columns by table ──────────────────────────────────
+    if summary["columns_by_table"]:
+        st.markdown('<div class="section-header">🔢 Columnas sin usar por tabla</div>', unsafe_allow_html=True)
+        for table_name in sorted(summary["columns_by_table"].keys()):
+            cols = summary["columns_by_table"][table_name]
+            with st.expander(f"📋 {table_name} ({len(cols)} columnas sin usar)", expanded=False):
+                df = pd.DataFrame(cols)
+                df = df[["column_name", "data_type", "is_hidden"]]
+                df.columns = ["Columna", "Tipo", "Oculta"]
+                st.dataframe(df, use_container_width=True, hide_index=True)
+
+    # ── Unused measures by table ─────────────────────────────────
+    if summary["measures_by_table"]:
+        st.markdown('<div class="section-header">📐 Medidas sin usar por tabla</div>', unsafe_allow_html=True)
+        for table_name in sorted(summary["measures_by_table"].keys()):
+            measures = summary["measures_by_table"][table_name]
+            with st.expander(f"📐 {table_name} ({len(measures)} medidas sin usar)", expanded=False):
+                for m in measures:
+                    st.markdown(f"**{m['measure_name']}**")
+                    if m.get("expression"):
+                        st.code(m["expression"], language="dax")
+
+
+def render_minimal_model_tab(doc, con):
+    """Render the minimal model generation tab."""
+    import sys, os
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+    if not doc.semantic_model_id:
+        st.warning("No se encontró un modelo semántico vinculado.")
+        return
+
+    st.markdown('<div class="section-header">⚡ Generar Modelo Mínimo</div>', unsafe_allow_html=True)
+    st.markdown(
+        "Genera un nuevo modelo semántico con **solo las tablas, columnas y medidas** "
+        "utilizadas por los informes vinculados. Las columnas y medidas sin usar se eliminan, "
+        "y el código M se ajusta con `Table.RemoveColumns`."
+    )
+
+    # Show what would be included
+    summary = doc.get_unused_summary()
+    kpis = doc.get_kpis()
+    total_cols = kpis.get("columns", 0)
+    total_meas = kpis.get("measures", 0)
+    total_tables = kpis.get("tables", 0)
+    used_cols = total_cols - summary["total_unused_columns"]
+    used_meas = total_meas - summary["total_unused_measures"]
+    used_tables = total_tables - summary["total_unused_tables"]
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Tablas", f"{used_tables} / {total_tables}",
+                   delta=f"-{summary['total_unused_tables']}" if summary['total_unused_tables'] else None,
+                   delta_color="normal")
+    with col2:
+        st.metric("Columnas", f"{used_cols} / {total_cols}",
+                   delta=f"-{summary['total_unused_columns']}" if summary['total_unused_columns'] else None,
+                   delta_color="normal")
+    with col3:
+        st.metric("Medidas", f"{used_meas} / {total_meas}",
+                   delta=f"-{summary['total_unused_measures']}" if summary['total_unused_measures'] else None,
+                   delta_color="normal")
+
+    st.markdown("---")
+
+    # Get model source path info
+    sm_row = con.execute(
+        "SELECT sm.name, w.displayName FROM semantic_model sm "
+        "LEFT JOIN workspaces w ON sm.workspace_id = w.id "
+        "WHERE sm.id = ?", [doc.semantic_model_id]
+    ).fetchone()
+    sm_name = sm_row[0] if sm_row else doc._sm_name
+    workspace_name = sm_row[1] if sm_row else None
+
+    # DB path from session state
+    db_path = st.session_state.get("_current_db_path", "")
+    base_dir_val = st.session_state.get("_current_base_dir", "")
+
+    # Source model path
+    if base_dir_val and workspace_name:
+        source_model_path = str(Path(base_dir_val) / workspace_name / sm_name)
+        st.info(f"📂 Modelo fuente: `{source_model_path}`")
     else:
-        st.success("✅ Todas las medidas del modelo están siendo usadas en al menos un informe.")
+        source_model_path = ""
+        st.warning("No se puede determinar la ruta del modelo fuente. "
+                    "Asegúrate de que la base de datos tenga la estructura "
+                    "`carpeta/workspace/modelo.SemanticModel`.")
+
+    # Output path
+    default_subset_name = sm_name.replace(".SemanticModel", "") + "_minimal.SemanticModel"
+    subset_name = st.text_input(
+        "📝 Nombre del modelo mínimo",
+        value=default_subset_name,
+        help="Nombre del nuevo modelo semántico"
+    ) or default_subset_name
+
+    if source_model_path:
+        output_dir = str(Path(source_model_path).parent / subset_name)
+        st.caption(f"📁 Se guardará en: `{output_dir}`")
+
+    # Generate button
+    if st.button("⚡ Generar Modelo Mínimo", type="primary", use_container_width=True):
+        if not source_model_path:
+            st.error("No se puede generar: falta la ruta del modelo fuente.")
+            return
+        if not Path(source_model_path).exists():
+            st.error(f"No se encontró el modelo fuente en: `{source_model_path}`")
+            return
+
+        with st.spinner("Generando modelo mínimo..."):
+            try:
+                from models.semantic_model import SemanticModel
+
+                model = SemanticModel(source_model_path)
+                model.load_from_directory(Path(source_model_path))
+
+                subset = model.create_subset_model_from_db(
+                    db_path=db_path,
+                    subset_name=subset_name,
+                    semantic_model_id=doc.semantic_model_id,
+                )
+
+                target_path = Path(source_model_path).parent / subset_name
+                subset.save_to_directory(target_path)
+
+                st.success(
+                    f"✅ Modelo mínimo generado: **{subset_name}**\n\n"
+                    f"- Tablas: {len(subset.tables)}\n"
+                    f"- Relaciones: {len(subset.relationships)}\n"
+                    f"- Guardado en: `{target_path}`"
+                )
+
+                # Show details
+                with st.expander("📋 Detalle de tablas incluidas", expanded=True):
+                    table_data = []
+                    for t in sorted(subset.tables, key=lambda t: t.name):
+                        table_data.append({
+                            "Tabla": t.name,
+                            "Columnas": len(t.columns),
+                            "Medidas": len(t.measures),
+                        })
+                    if table_data:
+                        st.dataframe(pd.DataFrame(table_data), use_container_width=True, hide_index=True)
+
+            except Exception as e:
+                st.error(f"Error al generar el modelo: {e}")
+                import traceback
+                st.code(traceback.format_exc())
 
 
 def render_report(doc, report_name, badge_color=None, badge_text_color=None):
@@ -223,31 +396,40 @@ def render_report(doc, report_name, badge_color=None, badge_text_color=None):
     kpis = doc.get_kpis()
     render_kpi_boxes(kpis)
 
-    # Build tab names: pages + Modelo Semántico + Medidas sin usar
-    page_labels = []
-    for p in doc.pages:
-        label = p.get("display_name") or p.get("name") or "Page"
-        page_labels.append(f"📄 {label}")
-    tab_names = page_labels + ["🗃️ Modelo Semántico", "⚠️ Medidas sin usar"]
-
-    if not tab_names:
+    if not doc.pages:
         st.info("Este informe no tiene páginas.")
         return
 
-    tabs = st.tabs(tab_names)
+    # Top-level tabs: always visible
+    top_tabs = st.tabs([
+        "📄 Páginas del Informe",
+        "🗃️ Modelo Semántico",
+        "🔍 Objetos sin usar",
+        "⚡ Modelo Mínimo",
+    ])
 
-    # Page tabs
-    for i, page in enumerate(doc.pages):
-        with tabs[i]:
-            render_page_tab(doc, page)
+    # ── Pages tab (nested page tabs inside) ──────────────────────
+    with top_tabs[0]:
+        page_labels = []
+        for p in doc.pages:
+            label = p.get("display_name") or p.get("name") or "Page"
+            page_labels.append(f"📄 {label}")
+        page_tabs = st.tabs(page_labels)
+        for i, page in enumerate(doc.pages):
+            with page_tabs[i]:
+                render_page_tab(doc, page)
 
-    # Semantic model tab (penultimate)
-    with tabs[len(doc.pages)]:
+    # ── Semantic model tab ───────────────────────────────────────
+    with top_tabs[1]:
         render_model_tab(doc)
 
-    # Unused measures tab (last)
-    with tabs[len(doc.pages) + 1]:
+    # ── Unused objects tab ───────────────────────────────────────
+    with top_tabs[2]:
         render_unused_tab(doc)
+
+    # ── Minimal model tab ────────────────────────────────────────
+    with top_tabs[3]:
+        render_minimal_model_tab(doc, con)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -275,6 +457,53 @@ with st.sidebar:
             format_func=lambda x: Path(x).stem,
         )
 
+        # Workspace filter with counts and sorting
+        workspace_options = []
+        workspace_map = {}
+        if ws:
+            try:
+                con_tmp = duckdb.connect(ws, read_only=True)
+                rows = con_tmp.execute("SELECT id, displayName FROM workspaces ORDER BY displayName").fetchall()
+                # Get counts for each workspace
+                counts = {}
+                for r in rows:
+                    wid = r[0]
+                    n_reports = con_tmp.execute("SELECT COUNT(*) FROM report WHERE workspace_id = ?", [wid]).fetchone()[0]
+                    n_models = con_tmp.execute("SELECT COUNT(*) FROM semantic_model WHERE workspace_id = ?", [wid]).fetchone()[0]
+                    counts[wid] = (n_reports, n_models)
+                con_tmp.close()
+                # Sort: non-empty first, then separator, then empty
+                non_empty = []
+                empty = []
+                for r in rows:
+                    wid = r[0]
+                    n_reports, n_models = counts[wid]
+                    display = f"{r[1]} (reports: {n_reports}, models: {n_models})"
+                    if n_reports > 0 or n_models > 0:
+                        non_empty.append((display, wid))
+                    else:
+                        empty.append((display, wid))
+                workspace_options = [d for d, w in non_empty]
+                workspace_map = {d: w for d, w in non_empty}
+                if empty:
+                    workspace_options.append("---")
+                    for d, w in empty:
+                        workspace_options.append(d)
+                        workspace_map[d] = w
+            except Exception:
+                workspace_options = []
+                workspace_map = {}
+
+        selected_workspace = None
+        if workspace_options:
+            # Remove separator from selectable options
+            selectable_options = [opt for opt in workspace_options if opt != "---"]
+            selected_workspace_display = st.selectbox(
+                "🏢 Workspace (filtro)", selectable_options, index=0)
+            selected_workspace = workspace_map.get(selected_workspace_display)
+        else:
+            selected_workspace = None
+
         st.markdown("---")
         search_mode = st.radio(
             "🔍 Buscar por",
@@ -290,12 +519,23 @@ with st.sidebar:
 # MAIN CONTENT
 # ══════════════════════════════════════════════════════════════════════
 if base_dir and ws:
+    # Store in session state for use by the minimal model tab
+    st.session_state["_current_db_path"] = ws
+    st.session_state["_current_base_dir"] = base_dir
     con = duckdb.connect(ws, read_only=True)
 
     try:
-        all_reports = con.execute("SELECT name FROM report ORDER BY name").fetchall()
+        if 'selected_workspace' in locals() and selected_workspace:
+            all_reports = con.execute(
+                "SELECT name FROM report WHERE workspace_id = ? ORDER BY name", [selected_workspace]
+            ).fetchall()
+            all_models = con.execute(
+                "SELECT name FROM semantic_model WHERE workspace_id = ? ORDER BY name", [selected_workspace]
+            ).fetchall()
+        else:
+            all_reports = con.execute("SELECT name FROM report ORDER BY name").fetchall()
+            all_models = con.execute("SELECT name FROM semantic_model ORDER BY name").fetchall()
         report_names = [r[0] for r in all_reports]
-        all_models = con.execute("SELECT name FROM semantic_model ORDER BY name").fetchall()
         model_names = [m[0] for m in all_models]
     except Exception as e:
         st.error(f"Error al leer la base de datos: {e}")
@@ -343,15 +583,15 @@ if base_dir and ws:
 
             if not linked_reports:
                 st.warning("No se encontraron informes vinculados a este modelo.")
-                # Still show model details
                 doc = ReportDocumenter(con, "__no_report__", semantic_model_name=selected_model)
-                doc.report = {"id": -1, "name": "__no_report__"}
-                doc.pages = []
-                tab_model, tab_unused = st.tabs(["🗃️ Modelo Semántico", "⚠️ Medidas sin usar"])
+                tab_model, tab_unused, tab_minimal = st.tabs(
+                    ["🗃️ Modelo Semántico", "🔍 Objetos sin usar", "⚡ Modelo Mínimo"])
                 with tab_model:
                     render_model_tab(doc)
                 with tab_unused:
                     render_unused_tab(doc)
+                with tab_minimal:
+                    render_minimal_model_tab(doc, con)
             else:
                 # Show badges for linked reports
                 badges_html = '<div style="margin-bottom:12px;">'

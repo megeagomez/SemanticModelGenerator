@@ -19,11 +19,15 @@ class TmdlParser:
             match = re.match(pattern, line.strip())
             if match:
                 value = match.group(1).strip()
-                # Eliminar comillas si las tiene
+                # Eliminar comillas si las tiene (solo si es un string simple,
+                # NO si contiene referencias tipo 'tabla'.'columna')
                 if value.startswith('"') and value.endswith('"'):
                     value = value[1:-1]
                 elif value.startswith("'") and value.endswith("'"):
-                    value = value[1:-1]
+                    # No quitar comillas si hay un patrón 'X'.'Y' (referencia tabla.columna)
+                    inner = value[1:-1]
+                    if "'." not in inner and ".'" not in inner:
+                        value = inner
                 
                 # Convertir booleanos
                 if value.lower() == 'true':

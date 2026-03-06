@@ -59,22 +59,27 @@ class SemanticModel:
     Mantiene la estructura de carpetas y archivos originales.
     """
     
-    def __init__(self, base_path_or_con, name=None):
+    def __init__(self, base_path_or_con, name=None, semantic_model_id=None, workspace_id=None):
         # Si es una conexión DuckDB, inicializa desde la BD
         import duckdb
         if isinstance(base_path_or_con, duckdb.DuckDBPyConnection):
             self.con = base_path_or_con
             self.name = name
             # Busca el id del modelo
-            row = self.con.execute("SELECT id FROM semantic_model WHERE name = ?", [self.name]).fetchone()
-            self.semantic_model_id = row[0] if row else None
+            if semantic_model_id is not None:
+                self.semantic_model_id = semantic_model_id
+            else:
+                row = self.con.execute("SELECT id FROM semantic_model WHERE name = ?", [self.name]).fetchone()
+                self.semantic_model_id = row[0] if row else None
+            self.workspace_id = workspace_id
             # Puedes cargar aquí más datos si lo necesitas
         else:
             # Retrocompatibilidad: inicializa desde path
             self.base_path = Path(base_path_or_con)
             self.name = name or self.base_path.stem
             self.con = None
-            self.semantic_model_id = None
+            self.semantic_model_id = semantic_model_id
+            self.workspace_id = workspace_id
             # ...carga desde archivos como antes...
         self.model: Optional[Model] = None
         self.relationships: List[Relationship] = []
@@ -529,11 +534,21 @@ class SemanticModel:
                 ).fetchone()
                 if row:
                     sm_id = row[0]
+            # Try name-based lookup (most reliable for locally-imported models)
+            if sm_id is None and self.name:
+                lookup_name = self.name if self.name.endswith('.SemanticModel') else self.name + '.SemanticModel'
+                row = conn.execute(
+                    "SELECT id FROM semantic_model WHERE name = ?",
+                    [lookup_name],
+                ).fetchone()
+                if row:
+                    sm_id = row[0]
             if sm_id is None:
                 row = conn.execute("SELECT id FROM semantic_model LIMIT 1").fetchone()
                 if not row:
                     raise ValueError("No semantic models found in database")
                 sm_id = row[0]
+                print(f"  ⚠️ Warning: falling back to first model in DB (id={sm_id})")
 
             # ── 1. Columnas usadas por reports ───────────────────────
             used_columns: Dict[str, Set[str]] = {}   # tabla → {cols}
@@ -541,9 +556,8 @@ class SemanticModel:
                 SELECT DISTINCT c.table_name, c.column_name
                 FROM report_column_used c
                 JOIN report r ON r.id = c.report_id
-                WHERE r.semantic_model_reference = (
-                    SELECT semantic_model_id FROM semantic_model WHERE id = ?
-                )
+                JOIN semantic_model sm ON sm.name = r.name || '.SemanticModel'
+                WHERE sm.id = ?
             """, [sm_id]).fetchall()
             for tbl, col in rows:
                 used_columns.setdefault(tbl, set()).add(col)
@@ -554,9 +568,8 @@ class SemanticModel:
                 SELECT DISTINCT m.table_name, m.measure_name
                 FROM report_measure_used m
                 JOIN report r ON r.id = m.report_id
-                WHERE r.semantic_model_reference = (
-                    SELECT semantic_model_id FROM semantic_model WHERE id = ?
-                )
+                JOIN semantic_model sm ON sm.name = r.name || '.SemanticModel'
+                WHERE sm.id = ?
             """, [sm_id]).fetchall()
             for tbl, meas in rows:
                 used_measures.setdefault(tbl, set()).add(meas)
@@ -676,6 +689,27 @@ class SemanticModel:
         finally:
             conn.close()
 
+        # ── 9b. SortByColumn dependencies ────────────────────────────
+        # Si una columna incluida tiene sortByColumn, la columna referenciada
+        # también debe incluirse (con cierre transitivo).
+        import re
+        changed = True
+        while changed:
+            changed = False
+            for table in self.tables:
+                if table.name not in final_tables:
+                    continue
+                included_cols = final_columns.get(table.name, set())
+                for col in table.columns:
+                    if col.name in included_cols and col.raw_content:
+                        m = re.search(r'sortByColumn:\s*(.+)', col.raw_content)
+                        if m:
+                            sort_col = m.group(1).strip().strip("'\"")
+                            if sort_col and sort_col not in included_cols:
+                                final_columns.setdefault(table.name, set()).add(sort_col)
+                                changed = True
+                                print(f"  [SortByColumn] {table.name}.'{col.name}' → añadida '{sort_col}'")
+
         # ── Logging ──────────────────────────────────────────────────
         print(f"\n{'='*60}")
         print(f"create_subset_model_from_db: {subset_name}")
@@ -713,6 +747,13 @@ class SemanticModel:
 
         # Relaciones
         subset_model.relationships = subset_relationships
+
+        # ── 10b. Eliminar variation blocks con relaciones no incluidas ──
+        valid_rel_ids = {rel.name for rel in subset_relationships if rel.name}
+        for table in subset_model.tables:
+            table.raw_content = self._strip_invalid_variations(
+                table.raw_content, valid_rel_ids
+            )
 
         # Metadatos para reconstrucción
         subset_model._file_metadata = {
@@ -1176,6 +1217,79 @@ class SemanticModel:
         
         return (relationship.from_table in table_names and 
                 relationship.to_table in table_names)
+    
+    @staticmethod
+    def _strip_invalid_variations(raw_content: str, valid_relationship_ids: set) -> str:
+        """
+        Elimina bloques 'variation' cuyo relationship GUID no está en el subset.
+        
+        Un bloque variation tiene esta estructura en TMDL:
+            variation <Name>
+                isDefault
+                relationship: <GUID>
+                defaultHierarchy: <Table>.'<Hierarchy>'
+        
+        Args:
+            raw_content: Contenido TMDL de la tabla
+            valid_relationship_ids: GUIDs de relaciones incluidas en el subset
+            
+        Returns:
+            Contenido TMDL sin las variations inválidas
+        """
+        import re
+        
+        if not raw_content or 'variation ' not in raw_content:
+            return raw_content
+        
+        lines = raw_content.split('\n')
+        result = []
+        i = 0
+        
+        while i < len(lines):
+            line = lines[i]
+            stripped = line.strip()
+            
+            # Detectar inicio de un bloque variation
+            if stripped.startswith('variation '):
+                variation_indent = len(line) - len(line.lstrip())
+                variation_lines = [line]
+                rel_guid = None
+                
+                # Recoger todas las líneas del bloque variation
+                j = i + 1
+                while j < len(lines):
+                    next_line = lines[j]
+                    next_stripped = next_line.strip()
+                    next_indent = len(next_line) - len(next_line.lstrip())
+                    
+                    # Si la indentación vuelve al nivel de variation o menor
+                    # y no es línea vacía, el bloque terminó
+                    if next_stripped and next_indent <= variation_indent:
+                        break
+                    
+                    variation_lines.append(next_line)
+                    
+                    # Buscar la línea relationship: <GUID>
+                    m = re.match(r'\s*relationship:\s*(.+)', next_line)
+                    if m:
+                        rel_guid = m.group(1).strip()
+                    
+                    j += 1
+                
+                # Decidir si mantener el bloque
+                if rel_guid and rel_guid in valid_relationship_ids:
+                    result.extend(variation_lines)
+                else:
+                    # Descartar el bloque variation
+                    var_name = stripped
+                    print(f"  [Variation] Eliminada '{var_name}' (relationship: {rel_guid})")
+                
+                i = j
+            else:
+                result.append(line)
+                i += 1
+        
+        return '\n'.join(result)
     
     def _rebuild_relationships_content(self, relationships: List[Relationship]) -> str:
         """
@@ -1732,6 +1846,11 @@ class SemanticModel:
         
         # Insertar relaciones
         for relationship in self.relationships:
+            if relationship.from_table is None or relationship.to_table is None:
+                print(f"[WARN] Relación '{relationship.name}' ignorada: from_table o to_table es None (from: {relationship.from_table}, to: {relationship.to_table})")
+                print("[WARN] Código fuente de la relación:")
+                print(relationship.raw_content)
+                continue
             connection.execute("""
                 INSERT INTO semantic_model_relationship (semantic_model_id, relationship_name, from_table, from_column, to_table, to_column, cardinality, cross_filtering_behavior, security_filtering_behavior, is_active)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

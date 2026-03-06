@@ -305,16 +305,19 @@ class ReportDocumenter:
         return [{"table_name": r[0], "partition_name": r[1], "source_type": r[2],
                  "mode": r[3], "source_expression": r[4]} for r in rows]
 
-    # ── unused measures ──────────────────────────────────────────────
+    # ── unused objects ───────────────────────────────────────────────
 
     def get_unused_measures(self):
-        """Measures defined in the model but not used in any report."""
+        """Measures defined in the model but not used in any report
+        (includes chained dependency analysis)."""
         if not self.semantic_model_id:
             return []
         all_measures = self.con.execute(
             "SELECT table_name, measure_name, expression "
             "FROM semantic_model_measure WHERE semantic_model_id = ?",
             [self.semantic_model_id]).fetchall()
+
+        # Directly used by reports
         used = self.con.execute(
             "SELECT DISTINCT rmu.measure_name "
             "FROM report_measure_used rmu "
@@ -323,8 +326,159 @@ class ReportDocumenter:
             "WHERE sm.id = ?",
             [self.semantic_model_id]).fetchall()
         used_set = {u[0] for u in used}
+
+        # Chained measures (dependencies of used ones)
+        if used_set:
+            placeholders = ", ".join(["?"] * len(used_set))
+            deps = self.con.execute(
+                f"SELECT DISTINCT referenced_name "
+                f"FROM semantic_model_measure_dependencies "
+                f"WHERE semantic_model_id = ? "
+                f"  AND measure_name IN ({placeholders}) "
+                f"  AND dependency_type = 'measure'",
+                [self.semantic_model_id] + list(used_set)).fetchall()
+            for (m,) in deps:
+                used_set.add(m)
+
         return [{"table_name": m[0], "measure_name": m[1], "expression": m[2]}
                 for m in all_measures if m[1] not in used_set]
+
+    def get_unused_columns(self):
+        """Columns defined in the model but not used in any report,
+        not referenced by measure dependencies, and not used in relationships."""
+        if not self.semantic_model_id:
+            return []
+        all_columns = self.con.execute(
+            "SELECT table_name, column_name, data_type, is_hidden "
+            "FROM semantic_model_column WHERE semantic_model_id = ?",
+            [self.semantic_model_id]).fetchall()
+
+        # Columns used directly in reports
+        used_in_reports = self.con.execute(
+            "SELECT DISTINCT rcu.table_name, rcu.column_name "
+            "FROM report_column_used rcu "
+            "JOIN report r ON rcu.report_id = r.id "
+            "JOIN semantic_model sm ON sm.name = r.name || '.SemanticModel' "
+            "WHERE sm.id = ?",
+            [self.semantic_model_id]).fetchall()
+        used_set = {(r[0], r[1]) for r in used_in_reports}
+
+        # Columns referenced by measure dependencies
+        dep_cols = self.con.execute(
+            "SELECT DISTINCT referenced_table, referenced_name "
+            "FROM semantic_model_measure_dependencies "
+            "WHERE semantic_model_id = ? AND dependency_type = 'column'",
+            [self.semantic_model_id]).fetchall()
+        for tbl, col in dep_cols:
+            if tbl:
+                used_set.add((tbl, col))
+
+        # Columns used in relationships
+        rel_cols = self.con.execute(
+            "SELECT from_table, from_column, to_table, to_column "
+            "FROM semantic_model_relationship WHERE semantic_model_id = ?",
+            [self.semantic_model_id]).fetchall()
+        for from_t, from_c, to_t, to_c in rel_cols:
+            if from_t and from_c:
+                used_set.add((from_t, from_c))
+            if to_t and to_c:
+                used_set.add((to_t, to_c))
+
+        return [{"table_name": c[0], "column_name": c[1],
+                 "data_type": c[2], "is_hidden": c[3]}
+                for c in all_columns if (c[0], c[1]) not in used_set]
+
+    def get_unused_tables(self):
+        """Tables in the model not referenced by any report."""
+        if not self.semantic_model_id:
+            return []
+        all_tables = self.con.execute(
+            "SELECT table_name, is_hidden FROM semantic_model_table "
+            "WHERE semantic_model_id = ?",
+            [self.semantic_model_id]).fetchall()
+
+        # Tables used in reports (columns or measures)
+        used_col_tables = self.con.execute(
+            "SELECT DISTINCT rcu.table_name "
+            "FROM report_column_used rcu "
+            "JOIN report r ON rcu.report_id = r.id "
+            "JOIN semantic_model sm ON sm.name = r.name || '.SemanticModel' "
+            "WHERE sm.id = ?",
+            [self.semantic_model_id]).fetchall()
+        used_meas_tables = self.con.execute(
+            "SELECT DISTINCT rmu.table_name "
+            "FROM report_measure_used rmu "
+            "JOIN report r ON rmu.report_id = r.id "
+            "JOIN semantic_model sm ON sm.name = r.name || '.SemanticModel' "
+            "WHERE sm.id = ?",
+            [self.semantic_model_id]).fetchall()
+
+        # Tables from measure dependencies
+        dep_tables = self.con.execute(
+            "SELECT DISTINCT referenced_name "
+            "FROM semantic_model_measure_dependencies "
+            "WHERE semantic_model_id = ? AND dependency_type = 'table'",
+            [self.semantic_model_id]).fetchall()
+        dep_col_tables = self.con.execute(
+            "SELECT DISTINCT referenced_table "
+            "FROM semantic_model_measure_dependencies "
+            "WHERE semantic_model_id = ? AND dependency_type = 'column'",
+            [self.semantic_model_id]).fetchall()
+
+        # Tables from relationships where the other table is used
+        rel_tables = set()
+        rels = self.con.execute(
+            "SELECT from_table, to_table FROM semantic_model_relationship "
+            "WHERE semantic_model_id = ?",
+            [self.semantic_model_id]).fetchall()
+
+        used_set = set()
+        for (t,) in used_col_tables:
+            used_set.add(t)
+        for (t,) in used_meas_tables:
+            used_set.add(t)
+        for (t,) in dep_tables:
+            used_set.add(t)
+        for (t,) in dep_col_tables:
+            if t:
+                used_set.add(t)
+
+        # If a relationship connects two used tables, both are used
+        for ft, tt in rels:
+            if ft in used_set or tt in used_set:
+                rel_tables.add(ft)
+                rel_tables.add(tt)
+        used_set |= rel_tables
+
+        return [{"table_name": t[0], "is_hidden": t[1]}
+                for t in all_tables if t[0] not in used_set]
+
+    def get_unused_summary(self):
+        """Return a summary dict with counts of unused objects."""
+        unused_cols = self.get_unused_columns()
+        unused_meas = self.get_unused_measures()
+        unused_tables = self.get_unused_tables()
+
+        # Group columns by table
+        cols_by_table = defaultdict(list)
+        for c in unused_cols:
+            cols_by_table[c["table_name"]].append(c)
+
+        # Group measures by table
+        meas_by_table = defaultdict(list)
+        for m in unused_meas:
+            meas_by_table[m["table_name"]].append(m)
+
+        return {
+            "unused_columns": unused_cols,
+            "unused_measures": unused_meas,
+            "unused_tables": unused_tables,
+            "columns_by_table": dict(cols_by_table),
+            "measures_by_table": dict(meas_by_table),
+            "total_unused_columns": len(unused_cols),
+            "total_unused_measures": len(unused_meas),
+            "total_unused_tables": len(unused_tables),
+        }
 
     # ── reports linked to a model ────────────────────────────────────
 
