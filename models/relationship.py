@@ -39,16 +39,20 @@ class Relationship:
         if not combined_value:
             return (None, None)
         
-        # Patrón para capturar: 'tabla'.'columna' o tabla.columna o combinaciones
-        # Busca tabla entre comillas simples o sin comillas, seguida de punto y columna
-        pattern = r"(?:'([^']+)'|([^\s.]+))\.(?:'([^']+)'|([^\s.]+))"
+        # Nueva versión: soporta comillas dobles dentro de comillas simples
+        # y nombres de tabla/columna con puntos y comillas escapadas
+        pattern = r"^('(?:[^']|'')+'|[^.]+)\.('(?:[^']|'')+'|[^.]+)$"
         match = re.match(pattern, combined_value.strip())
         
         if match:
             # match.group(1) o match.group(2) es la tabla (con o sin comillas)
             # match.group(3) o match.group(4) es la columna (con o sin comillas)
-            table = match.group(1) if match.group(1) else match.group(2)
-            column = match.group(3) if match.group(3) else match.group(4)
+            def unquote(val):
+                if val.startswith("'") and val.endswith("'"):
+                    return val[1:-1].replace("''", "'")
+                return val
+            table = unquote(match.group(1))
+            column = unquote(match.group(2))
             return (table, column)
         
         # Si no coincide el patrón, retornar None
