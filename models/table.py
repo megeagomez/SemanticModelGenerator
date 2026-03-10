@@ -12,8 +12,11 @@ class Column:
         self.source_column: Optional[str] = None
         self.format_string: Optional[str] = None
         self.summarize_by: Optional[str] = None
+        self.sort_by_column: Optional[str] = None
         self.is_hidden: bool = False
         self.raw_content: str = ""
+        # Lista de dicts con {bin_table, bin_column} extraídos de __PBI_SemanticLinks
+        self.semantic_links: List[Dict[str, str]] = []
 
 class Measure:
     """Representa una medida DAX"""
@@ -83,11 +86,38 @@ class Table:
         in_column = False
         current_column = None
         column_content = []
-        
+
+        def _finalize_column(col, col_lines):
+            col.raw_content = '\n'.join(col_lines)
+            parser = TmdlParser(col.raw_content)
+            col.data_type = parser.get_property('dataType')
+            col.source_column = parser.get_property('sourceColumn')
+            col.format_string = parser.get_property('formatString')
+            col.summarize_by = parser.get_property('summarizeBy')
+            col.sort_by_column = parser.get_property('sortByColumn')
+            col.is_hidden = parser.get_property('isHidden', False)
+            # Parsear __PBI_SemanticLinks (bins/grupos generados desde esta columna)
+            import json as _json
+            for raw_line in col_lines:
+                m = re.search(r'annotation\s+__PBI_SemanticLinks\s*=\s*(\[.+\])', raw_line)
+                if m:
+                    try:
+                        links = _json.loads(m.group(1))
+                        for link in links:
+                            target = link.get('LinkTarget', {})
+                            link_type = link.get('LinkType', '')
+                            if link_type == 'UsedInGroup' and target.get('ObjectType') == 4:
+                                col.semantic_links.append({
+                                    'bin_table': target.get('TableName', ''),
+                                    'bin_column': target.get('TableItemName', ''),
+                                })
+                    except Exception:
+                        pass
+
         for line in content.split('\n'):
             if line.strip().startswith('column '):
                 if current_column:
-                    current_column.raw_content = '\n'.join(column_content)
+                    _finalize_column(current_column, column_content)
                     columns.append(current_column)
                 
                 current_column = Column()
@@ -98,23 +128,18 @@ class Table:
                 column_content = [line]
                 in_column = True
             elif in_column:
-                column_content.append(line)
-                if line.strip() and not line.strip().startswith((' ', '\t')):
-                    if current_column:
-                        current_column.raw_content = '\n'.join(column_content)
-                        parser = TmdlParser(current_column.raw_content)
-                        current_column.data_type = parser.get_property('dataType')
-                        current_column.source_column = parser.get_property('sourceColumn')
-                        current_column.format_string = parser.get_property('formatString')
-                        current_column.summarize_by = parser.get_property('summarizeBy')
-                        current_column.is_hidden = parser.get_property('isHidden', False)
-                        columns.append(current_column)
+                # Línea no indentada y no vacía → fin del bloque de columna
+                if line.strip() and not line.startswith((' ', '\t')):
+                    _finalize_column(current_column, column_content)
+                    columns.append(current_column)
                     in_column = False
                     current_column = None
                     column_content = []
+                else:
+                    column_content.append(line)
         
         if current_column:
-            current_column.raw_content = '\n'.join(column_content)
+            _finalize_column(current_column, column_content)
             columns.append(current_column)
         
         return columns
@@ -260,16 +285,25 @@ class Table:
                 base_indent = len(line) - len(line.lstrip())
                 
                 # Extraer nombre y tipo: "partition DimCustomer = m"
-                match = re.match(r'^\s*partition\s+([^\s=]+)\s*=\s*(\w+)', line)
+                # Soporta nombres con espacios entre comillas: partition 'Nombre Con Espacios' = m
+                match = re.match(r"^\s*partition\s+(?:'([^']+)'|([^\s=]+))\s*=\s*(\w+)", line)
                 if match:
-                    current_partition.name = match.group(1)
-                    current_partition.source_type = match.group(2)  # m, calculated, etc.
+                    current_partition.name = match.group(1) or match.group(2)
+                    current_partition.source_type = match.group(3)  # m, calculated, etc.
                 continue
             
             if in_partition:
-                partition_content.append(line)
                 current_indent = len(line) - len(line.lstrip())
-                
+
+                # Línea no vacía al nivel base o menor → pertenece a la tabla, no a la partición
+                if stripped and current_indent <= base_indent:
+                    in_partition = False
+                    in_source_block = False
+                    # No capturar esta línea; dejar que el bucle principal la procese
+                    continue
+
+                partition_content.append(line)
+
                 # Detectar "mode: import/directQuery/dual"
                 if re.match(r'^\s*mode:\s*', line):
                     mode_match = re.match(r'^\s*mode:\s*(\w+)', line)
@@ -296,12 +330,8 @@ class Table:
                         else:
                             current_partition.source_expression = line.strip()
                     elif stripped:
-                        # Fin del bloque source (volvemos a indentación base)
+                        # Fin del bloque source (volvemos a indentación base + 1)
                         in_source_block = False
-                        # Si la línea no es otra propiedad de partition, terminamos
-                        if not re.match(r'^\s*(mode|annotation|dataView):', line):
-                            in_partition = False
-                            continue
         
         # Guardar última partición
         if current_partition:
@@ -446,7 +476,23 @@ class Table:
         new_lines.append(f'{remove_step_name}')
         
         updated_partition.source_expression = '\n'.join(new_lines)
-        
+
+        # Actualizar raw_content: reemplazar el bloque source = con la expresión M actualizada
+        raw_lines = partition.raw_content.split('\n')
+        source_line_idx = -1
+        for ridx, rline in enumerate(raw_lines):
+            if re.match(r'^\s*source\s*=', rline):
+                source_line_idx = ridx
+                break
+        if source_line_idx >= 0:
+            # Determinar la indentación del bloque source
+            source_indent = len(raw_lines[source_line_idx]) - len(raw_lines[source_line_idx].lstrip())
+            expr_indent = '\t' * (source_indent + 1)
+            new_raw_lines = raw_lines[:source_line_idx + 1]
+            for expr_line in updated_partition.source_expression.split('\n'):
+                new_raw_lines.append(f'{expr_indent}{expr_line}')
+            updated_partition.raw_content = '\n'.join(new_raw_lines)
+
         return updated_partition
     
     def filter_elements(
@@ -691,10 +737,10 @@ class Table:
                 current_element_lines = [line]
                 base_indent = current_indent
                 
-                # Extraer nombre de partición
-                match = re.match(r'partition\s+([^\s=]+)', stripped)
+                # Extraer nombre de partición (soporta nombres entre comillas con espacios)
+                match = re.match(r"partition\s+(?:'([^']+)'|([^\s=]+))", stripped)
                 if match:
-                    current_element_name = match.group(1)
+                    current_element_name = match.group(1) or match.group(2)
                     # Buscar la partición actualizada correspondiente
                     matching_partition = None
                     for part in filtered_partitions:
@@ -704,8 +750,6 @@ class Table:
                     
                     if matching_partition:
                         keep_current_element = True
-                        # Usar la partición actualizada en lugar de la original
-                        # Guardaremos las líneas del elemento pero luego las reemplazaremos
                         current_element_lines = []  # Reiniciar para capturar y reemplazar
                     else:
                         keep_current_element = False
@@ -731,16 +775,10 @@ class Table:
                                     break
                             
                             if matching_partition:
-                                # Generar TMDL para la partición actualizada
+                                # Emitir raw_content directamente (preserva todas las propiedades)
                                 result_lines.append('')
-                                result_lines.append(f'\tpartition {matching_partition.name} = {matching_partition.source_type}')
-                                if matching_partition.mode:
-                                    result_lines.append(f'\t\tmode: {matching_partition.mode}')
-                                if matching_partition.source_expression:
-                                    result_lines.append('\t\tsource =')
-                                    # Indentar cada línea de la expresión M
-                                    for expr_line in matching_partition.source_expression.split('\n'):
-                                        result_lines.append(f'\t\t\t{expr_line}')
+                                for part_line in matching_partition.raw_content.split('\n'):
+                                    result_lines.append(part_line)
                         else:
                             result_lines.extend(current_element_lines)
                     
@@ -773,16 +811,10 @@ class Table:
                         break
                 
                 if matching_partition:
-                    # Generar TMDL para la partición actualizada
+                    # Emitir raw_content directamente (preserva todas las propiedades)
                     result_lines.append('')
-                    result_lines.append(f'\tpartition {matching_partition.name} = {matching_partition.source_type}')
-                    if matching_partition.mode:
-                        result_lines.append(f'\t\tmode: {matching_partition.mode}')
-                    if matching_partition.source_expression:
-                        result_lines.append('\t\tsource =')
-                        # Indentar cada línea de la expresión M
-                        for expr_line in matching_partition.source_expression.split('\n'):
-                            result_lines.append(f'\t\t\t{expr_line}')
+                    for part_line in matching_partition.raw_content.split('\n'):
+                        result_lines.append(part_line)
             else:
                 result_lines.extend(current_element_lines)
         

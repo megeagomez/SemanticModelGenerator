@@ -692,7 +692,6 @@ class SemanticModel:
         # ── 9b. SortByColumn dependencies ────────────────────────────
         # Si una columna incluida tiene sortByColumn, la columna referenciada
         # también debe incluirse (con cierre transitivo).
-        import re
         changed = True
         while changed:
             changed = False
@@ -701,14 +700,45 @@ class SemanticModel:
                     continue
                 included_cols = final_columns.get(table.name, set())
                 for col in table.columns:
-                    if col.name in included_cols and col.raw_content:
-                        m = re.search(r'sortByColumn:\s*(.+)', col.raw_content)
-                        if m:
-                            sort_col = m.group(1).strip().strip("'\"")
-                            if sort_col and sort_col not in included_cols:
-                                final_columns.setdefault(table.name, set()).add(sort_col)
-                                changed = True
-                                print(f"  [SortByColumn] {table.name}.'{col.name}' → añadida '{sort_col}'")
+                    if col.name in included_cols and col.sort_by_column:
+                        sort_col = col.sort_by_column
+                        if sort_col not in included_cols:
+                            final_columns.setdefault(table.name, set()).add(sort_col)
+                            changed = True
+                            print(f"  [SortByColumn] {table.name}.'{col.name}' → añadida '{sort_col}'")
+
+        # ── 9c. Bins/Grupos (__PBI_SemanticLinks) ─────────────────────
+        # Si una columna incluida tiene un bin/grupo derivado (o viceversa),
+        # la columna fuente también debe incluirse (y el bin si está en el modelo).
+        conn2 = duckdb.connect(db_path, read_only=True)
+        try:
+            # Columna fuente → bin: si la fuente está incluida, incluir el bin si existe
+            # Bin → columna fuente: si el bin está incluido, incluir la fuente
+            bin_rows = conn2.execute(
+                "SELECT table_name, source_column, bin_table, bin_column "
+                "FROM semantic_model_table_bins WHERE semantic_model_id = ?",
+                [sm_id],
+            ).fetchall()
+        except Exception:
+            bin_rows = []
+        finally:
+            conn2.close()
+
+        for (src_table, src_col, bin_table, bin_col) in bin_rows:
+            src_included = src_table in final_tables and src_col in final_columns.get(src_table, set())
+            bin_included = bin_table in final_tables and bin_col in final_columns.get(bin_table, set())
+
+            if src_included and not bin_included:
+                # La columna fuente está incluida → incluir también el bin
+                if bin_table in final_tables:
+                    final_columns.setdefault(bin_table, set()).add(bin_col)
+                    print(f"  [Bin] {src_table}.'{src_col}' → bin añadido '{bin_table}'.'{bin_col}'")
+
+            if bin_included and not src_included:
+                # El bin está incluido → incluir también la columna fuente
+                final_tables.add(src_table)
+                final_columns.setdefault(src_table, set()).add(src_col)
+                print(f"  [Bin] '{bin_table}'.'{bin_col}' → fuente añadida '{src_table}'.'{src_col}'")
 
         # ── Logging ──────────────────────────────────────────────────
         print(f"\n{'='*60}")
@@ -1648,6 +1678,7 @@ class SemanticModel:
         connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_semantic_model_measure_id START 1")
         connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_semantic_model_relationship_id START 1")
         connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_semantic_model_partition_id START 1")
+        connection.execute("CREATE SEQUENCE IF NOT EXISTS seq_semantic_model_table_bins_id START 1")
         
         # Crear tabla semantic_model (sin dropear, para acumular múltiples modelos)
         connection.execute("""
@@ -1758,6 +1789,11 @@ class SemanticModel:
                 FOREIGN KEY(semantic_model_id) REFERENCES semantic_model(id)
             )
         """)
+        # Migración: añadir sort_by_column si no existe (bases de datos antiguas)
+        try:
+            connection.execute("ALTER TABLE semantic_model_column ADD COLUMN sort_by_column VARCHAR")
+        except Exception:
+            pass  # columna ya existe
         
         # Crear tabla semantic_model_measure
         connection.execute("""
@@ -1793,11 +1829,26 @@ class SemanticModel:
             )
         """)
         
+        # Crear tabla semantic_model_table_bins (bins/grupos AutoBI derivados de columnas)
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS semantic_model_table_bins (
+                id INTEGER PRIMARY KEY DEFAULT nextval('seq_semantic_model_table_bins_id'),
+                semantic_model_id INTEGER NOT NULL,
+                table_name VARCHAR NOT NULL,
+                source_column VARCHAR NOT NULL,
+                bin_table VARCHAR NOT NULL,
+                bin_column VARCHAR NOT NULL,
+                created_at TIMESTAMP DEFAULT now(),
+                FOREIGN KEY(semantic_model_id) REFERENCES semantic_model(id)
+            )
+        """)
+
         # AHORA SÍ: Limpiar datos antiguos de este modelo (después de crear las tablas)
         connection.execute("DELETE FROM semantic_model_measure WHERE semantic_model_id = ?", [semantic_model_id])
         connection.execute("DELETE FROM semantic_model_column WHERE semantic_model_id = ?", [semantic_model_id])
         connection.execute("DELETE FROM semantic_model_table WHERE semantic_model_id = ?", [semantic_model_id])
         connection.execute("DELETE FROM semantic_model_relationship WHERE semantic_model_id = ?", [semantic_model_id])
+        connection.execute("DELETE FROM semantic_model_table_bins WHERE semantic_model_id = ?", [semantic_model_id])
         
         # Insertar tablas, columnas y medidas
         for table in self.tables:
@@ -1815,8 +1866,8 @@ class SemanticModel:
             # Insertar columnas
             for column in table.columns:
                 connection.execute("""
-                    INSERT INTO semantic_model_column (semantic_model_id, table_name, column_name, data_type, summarize_by, is_hidden, format_string)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO semantic_model_column (semantic_model_id, table_name, column_name, data_type, summarize_by, is_hidden, format_string, sort_by_column)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """, [
                     semantic_model_id,
                     table.name,
@@ -1824,7 +1875,8 @@ class SemanticModel:
                     column.data_type,
                     column.summarize_by,
                     column.is_hidden,
-                    column.format_string
+                    column.format_string,
+                    column.sort_by_column
                 ])
             
             # Insertar medidas
@@ -1843,6 +1895,22 @@ class SemanticModel:
             
             # Insertar particiones (delegado a la clase Table)
             table.save_partitions_to_database(connection, semantic_model_id)
+
+            # Insertar bins/grupos derivados de columnas (__PBI_SemanticLinks)
+            for column in table.columns:
+                for link in column.semantic_links:
+                    if link.get('bin_table') and link.get('bin_column'):
+                        connection.execute("""
+                            INSERT INTO semantic_model_table_bins
+                                (semantic_model_id, table_name, source_column, bin_table, bin_column)
+                            VALUES (?, ?, ?, ?, ?)
+                        """, [
+                            semantic_model_id,
+                            table.name,
+                            column.name,
+                            link['bin_table'],
+                            link['bin_column'],
+                        ])
         
         # Insertar relaciones
         for relationship in self.relationships:

@@ -38,6 +38,8 @@ class Model:
     
     def save_to_file(self, filepath: Path):
         """Guarda el modelo a un archivo .tmdl"""
+        if 'Objetivos Usuarios' in str(filepath):
+            print("Guardando modelo en:", filepath)
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(self.raw_content)
     
