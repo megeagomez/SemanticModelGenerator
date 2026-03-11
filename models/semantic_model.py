@@ -630,6 +630,43 @@ class SemanticModel:
             # ── 5. Conjunto final de tablas ──────────────────────────
             final_tables = report_tables | dep_tables | set(dep_columns.keys())
 
+            # ── 5b. Dependencias de tablas calculadas ────────────────
+            # Las tablas calculadas (DAX) referencian otras tablas/columnas.
+            # Iteramos hasta cierre transitivo (tablas calculadas que dependen
+            # de otras tablas calculadas).
+            calc_tables_processed: Set[str] = set()
+            try:
+                while True:
+                    pending = final_tables - calc_tables_processed
+                    if not pending:
+                        break
+                    calc_tables_processed |= pending
+                    placeholders_ct = ", ".join(["?"] * len(pending))
+                    dep_rows = conn.execute(f"""
+                        SELECT dependency_type, referenced_name, referenced_table
+                        FROM semantic_model_calculatedTable_dependencies
+                        WHERE semantic_model_id = ?
+                          AND calculated_table_name IN ({placeholders_ct})
+                    """, [sm_id] + list(pending)).fetchall()
+
+                    new_tables: Set[str] = set()
+                    for dep_type, ref_name, ref_table in dep_rows:
+                        if dep_type == 'table':
+                            if ref_name not in final_tables:
+                                print(f"  [CalcTable] añadida tabla '{ref_name}' (dep de tabla calculada)")
+                                new_tables.add(ref_name)
+                        elif dep_type == 'column' and ref_table:
+                            if ref_table not in final_tables:
+                                print(f"  [CalcTable] añadida tabla '{ref_table}' (dep de tabla calculada)")
+                                new_tables.add(ref_table)
+                            dep_columns.setdefault(ref_table, set()).add(ref_name)
+
+                    final_tables |= new_tables
+                    if not new_tables:
+                        break
+            except Exception:
+                pass  # La tabla puede no existir en DBs antiguas
+
             # ── 6. Unir columnas: report usage + DAX deps ────────────
             # Para cada tabla, columnas que deben incluirse
             final_columns: Dict[str, Set[str]] = {}
@@ -693,15 +730,24 @@ class SemanticModel:
         # Si una columna incluida tiene sortByColumn, la columna referenciada
         # también debe incluirse (con cierre transitivo).
         changed = True
-        while changed:
+        iteration = 0
+        while changed and iteration < 10:  # Límite para evitar loops infinitos
+            iteration += 1
             changed = False
             for table in self.tables:
                 if table.name not in final_tables:
                     continue
                 included_cols = final_columns.get(table.name, set())
+                # Columnas disponibles en la tabla original
+                available_cols = {c.name for c in table.columns}
+                
                 for col in table.columns:
                     if col.name in included_cols and col.sort_by_column:
                         sort_col = col.sort_by_column
+                        # Validar que sort_col exista en la tabla
+                        if sort_col not in available_cols:
+                            print(f"  [SortByColumn] ⚠️ {table.name}.'{col.name}' → '{sort_col}' NO EXISTE EN TABLA (ignorado)")
+                            continue
                         if sort_col not in included_cols:
                             final_columns.setdefault(table.name, set()).add(sort_col)
                             changed = True
@@ -739,6 +785,10 @@ class SemanticModel:
                 final_tables.add(src_table)
                 final_columns.setdefault(src_table, set()).add(src_col)
                 print(f"  [Bin] '{bin_table}'.'{bin_col}' → fuente añadida '{src_table}'.'{src_col}'")
+
+        # ── DEBUG: estado de final_columns antes de construir submodelo ──
+        if 'dim_WorkingDay' in final_columns:
+            print(f"\n[DEBUG] final_columns['dim_WorkingDay'] ANTES de construir submodelo: {sorted(final_columns['dim_WorkingDay'])}")
 
         # ── Logging ──────────────────────────────────────────────────
         print(f"\n{'='*60}")
@@ -836,6 +886,35 @@ class SemanticModel:
         if create_pbip:
             models_path = self.base_path.parent
             SemanticModel.scaffold_pbip_and_report(models_path, subset_name)
+
+        # ════════════════════════════════════════════════════════════════
+        # DEBUG: Verificar columnas sort_by que se perdieron
+        # ════════════════════════════════════════════════════════════════
+        for table in subset_model.tables:
+            if table.name == 'dim_WorkingDay':
+                # Tabla original
+                original_cols = {c.name for c in next(t for t in self.tables if t.name == 'dim_WorkingDay').columns}
+                print(f"\n[DEBUG] Tabla original 'dim_WorkingDay' tiene estas columnas:")
+                print(f"  {sorted(original_cols)}")
+                
+                print(f"\n[DEBUG] final_columns['dim_WorkingDay'] esperadas antes de filter_elements:")
+                print(f"  {sorted(final_columns.get('dim_WorkingDay', set()))}")
+                
+                print(f"\n[DEBUG] Tabla {table.name} FINAL (después de filter_elements):")
+                for col in table.columns:
+                    print(f"  - {col.name}")
+                # Comparar con lo que debería tener
+                expected = final_columns.get(table.name, set())
+                print(f"\n[DEBUG] Columnas esperadas en final_columns: {sorted(expected)}")
+                missing = expected - {c.name for c in table.columns}
+                not_in_original = missing - original_cols
+                if missing:
+                    print(f"[DEBUG] ⚠️ FALTA: {sorted(missing)}")
+                    if not_in_original:
+                        print(f"[DEBUG]   → {sorted(not_in_original)} NO EXISTEN EN TABLA ORIGINAL")
+                    in_original = missing & original_cols
+                    if in_original:
+                        print(f"[DEBUG]   → {sorted(in_original)} EXISTEN EN TABLA ORIGINAL pero fueron filtradas")
 
         return subset_model
 
@@ -1768,11 +1847,23 @@ class SemanticModel:
                 semantic_model_id INTEGER NOT NULL,
                 table_name VARCHAR NOT NULL,
                 is_hidden BOOLEAN DEFAULT FALSE,
+                is_calculated BOOLEAN DEFAULT FALSE,
+                source_code TEXT,
                 annotations JSON,
                 created_at TIMESTAMP DEFAULT now(),
                 FOREIGN KEY(semantic_model_id) REFERENCES semantic_model(id)
             )
         """)
+        
+        # Migración: añadir columnas is_calculated y source_code si no existen (bases de datos antiguas)
+        try:
+            connection.execute("ALTER TABLE semantic_model_table ADD COLUMN is_calculated BOOLEAN DEFAULT FALSE")
+        except Exception:
+            pass  # columna ya existe
+        try:
+            connection.execute("ALTER TABLE semantic_model_table ADD COLUMN source_code TEXT")
+        except Exception:
+            pass  # columna ya existe
         
         # Crear tabla semantic_model_column
         connection.execute("""
@@ -1854,12 +1945,14 @@ class SemanticModel:
         for table in self.tables:
             # Insertar tabla
             connection.execute("""
-                INSERT INTO semantic_model_table (semantic_model_id, table_name, is_hidden, annotations)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO semantic_model_table (semantic_model_id, table_name, is_hidden, is_calculated, source_code, annotations)
+                VALUES (?, ?, ?, ?, ?, ?)
             """, [
                 semantic_model_id,
                 table.name,
                 table.is_hidden,
+                table.is_calculated,
+                table.source_code,
                 json.dumps(table.annotations) if table.annotations else None
             ])
             

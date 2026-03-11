@@ -50,6 +50,8 @@ class Table:
         self.partitions: List[Partition] = []
         self.hierarchies: List[Dict] = []
         self.is_hidden: bool = False
+        self.is_calculated: bool = False
+        self.source_code: Optional[str] = None
         self.line_age_granularity: Optional[str] = None
         self.annotations: Dict[str, Any] = {}
         self.raw_content: str = ""
@@ -76,6 +78,13 @@ class Table:
         
         # Parsear particiones embebidas
         instance.partitions = cls._parse_partitions(instance.raw_content)
+        
+        # Detectar si es tabla calculada y extraer código DAX
+        for partition in instance.partitions:
+            if partition.source_type == 'calculated':
+                instance.is_calculated = True
+                instance.source_code = partition.source_expression
+                break
         
         return instance
     
@@ -121,10 +130,16 @@ class Table:
                     columns.append(current_column)
                 
                 current_column = Column()
-                # Extraer nombre de la columna
-                match = re.match(r".*column\s+['\"]?([^'\"]+)['\"]?", line)
+                # Extraer nombre de la columna (solo hasta el primer =, espacio o comilla)
+                # Soporta: column MesKey, column 'Name With Spaces', column "QuotedName"
+                match = re.match(r"^\s*column\s+(['\"])?([^'\"=\s]+)\1?", line)
                 if match:
-                    current_column.name = match.group(1)
+                    current_column.name = match.group(2)
+                else:
+                    # Fallback: si no encaja el patrón 1, intenta capturar entre comillas
+                    match = re.match(r"^\s*column\s+['\"]([^'\"]+)['\"]", line)
+                    if match:
+                        current_column.name = match.group(1)
                 column_content = [line]
                 in_column = True
             elif in_column:
@@ -539,6 +554,14 @@ class Table:
                 ]
         else:
             filtered_table.columns = self.columns.copy()
+        
+        # Limpiar sortByColumn inválidos (que apunten a columnas no incluidas)
+        # Esto evita que Power BI falle con "referencia a objeto no encontrado"
+        included_col_names = {col.name for col in filtered_table.columns}
+        for col in filtered_table.columns:
+            if col.sort_by_column and col.sort_by_column not in included_col_names:
+                print(f"  [Filter] Limpiando sortByColumn inválido: {self.name}.'{col.name}' → '{col.sort_by_column}' (no incluida)")
+                col.sort_by_column = None
         
         # Filtrar medidas
         if measures is not None:

@@ -324,6 +324,17 @@ class DaxTokenizer:
         self._tables_lower: Dict[str, str] = {
             t.lower(): t for t in self.known_tables
         }
+        # Regex compilado una vez para detectar nombres de tabla desnudos
+        # (sin [Columna] a continuación), e.g. COUNTROWS(Table), VALUES(Table)
+        # Se ordena de mayor a menor longitud para evitar matches parciales.
+        if self.known_tables:
+            sorted_tables = sorted(self.known_tables, key=len, reverse=True)
+            self._bare_table_re: Optional[re.Pattern] = re.compile(
+                r"(?<!['\.\w])(?:" + "|".join(re.escape(t) for t in sorted_tables) + r")(?!\s*\[)",
+                re.IGNORECASE,
+            )
+        else:
+            self._bare_table_re = None
 
     # ──────────────────────────────────────────
     # Public: analyze single expression
@@ -380,6 +391,18 @@ class DaxTokenizer:
         # 6) Variables – VAR name = ...
         for m in re.finditer(r'\bVAR\s+(\w+)', text, re.IGNORECASE):
             deps.variables.add(m.group(1))
+
+        # 7) Bare table name references: COUNTROWS(Table), VALUES(Table), FILTER(Table, ...)
+        # Busca nombres de tabla conocidos que no van seguidos de [Columna].
+        # Excluye los que coincidan con variables VAR declaradas en esta expresión.
+        if self._bare_table_re:
+            var_names_lower = {v.lower() for v in deps.variables}
+            for m in self._bare_table_re.finditer(text_no_refs):
+                raw = m.group(0).strip()
+                if raw.lower() in var_names_lower:
+                    continue  # es un alias VAR, no una tabla
+                tbl = self._resolve_table(raw)
+                deps.tables.add(tbl)
 
         return deps
 
@@ -504,10 +527,9 @@ class DaxTokenizer:
     @staticmethod
     def ensure_dependencies_table(conn) -> None:
         """
-        Crea la tabla ``semantic_model_measure_dependencies`` si no existe.
-
-        Útil para garantizar que la tabla exista (aunque vacía) antes de que
-        otros métodos como ``create_subset_model_from_db`` la consulten.
+        Crea las tablas de dependencias si no existen:
+        - semantic_model_measure_dependencies (dependencias de medidas)
+        - semantic_model_calculatedTable_dependencies (dependencias de tablas calculadas)
 
         Args:
             conn: Conexión DuckDB abierta (read-write).
@@ -521,6 +543,22 @@ class DaxTokenizer:
                 semantic_model_id INTEGER NOT NULL,
                 measure_name VARCHAR NOT NULL,
                 measure_table VARCHAR NOT NULL,
+                dependency_type VARCHAR NOT NULL,
+                referenced_name VARCHAR NOT NULL,
+                referenced_table VARCHAR,
+                created_at TIMESTAMP DEFAULT now(),
+                FOREIGN KEY(semantic_model_id) REFERENCES semantic_model(id)
+            )
+        """)
+        
+        conn.execute(
+            "CREATE SEQUENCE IF NOT EXISTS seq_sm_calc_table_dep_id START 1"
+        )
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS semantic_model_calculatedTable_dependencies (
+                id INTEGER PRIMARY KEY DEFAULT nextval('seq_sm_calc_table_dep_id'),
+                semantic_model_id INTEGER NOT NULL,
+                calculated_table_name VARCHAR NOT NULL,
                 dependency_type VARCHAR NOT NULL,
                 referenced_name VARCHAR NOT NULL,
                 referenced_table VARCHAR,
@@ -645,6 +683,113 @@ class DaxTokenizer:
                     "(semantic_model_id, measure_name, measure_table, "
                     " dependency_type, referenced_name, referenced_table) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
+                    rows_to_insert,
+                )
+
+            return len(rows_to_insert)
+
+        finally:
+            if _own_conn:
+                conn.close()
+
+    def save_calculatedTable_dependencies_to_db(
+        self,
+        db_path: str,
+        semantic_model_id: Optional[int] = None,
+        conn=None,
+    ) -> int:
+        """
+        Calcula las dependencias de tablas calculadas (partition source)
+        y las guarda en ``semantic_model_calculatedTable_dependencies``.
+
+        Args:
+            db_path: Ruta al fichero .duckdb.
+            semantic_model_id: ID numérico del modelo. Si None, usa el primero.
+            conn: Conexión DuckDB (opcional).
+
+        Returns:
+            Número de filas insertadas.
+        """
+        import duckdb
+
+        _own_conn = conn is None
+        if _own_conn:
+            conn = duckdb.connect(db_path)
+        try:
+            # Resolver semantic_model_id
+            if semantic_model_id is None:
+                row = conn.execute(
+                    "SELECT id FROM semantic_model LIMIT 1"
+                ).fetchone()
+                if not row:
+                    raise ValueError("No semantic models found in database")
+                semantic_model_id = row[0]
+
+            # Obtener tablas calculadas con su código DAX
+            calc_tables = conn.execute(
+                "SELECT table_name, source_code FROM semantic_model_table "
+                "WHERE semantic_model_id = ? AND is_calculated = true",
+                [semantic_model_id],
+            ).fetchall()
+
+            # Crear tabla si no existe
+            DaxTokenizer.ensure_dependencies_table(conn)
+
+            # Limpiar datos anteriores de este modelo
+            conn.execute(
+                "DELETE FROM semantic_model_calculatedTable_dependencies "
+                "WHERE semantic_model_id = ?",
+                [semantic_model_id],
+            )
+
+            # Construir filas a insertar
+            rows_to_insert: List[Tuple] = []
+
+            for table_name, source_code in calc_tables:
+                if not source_code:
+                    continue
+
+                # Analizar el código DAX de la tabla calculada
+                deps = self.analyze(source_code)
+
+                # Dependencias tipo "table"
+                for tbl in sorted(deps.tables):
+                    rows_to_insert.append((
+                        semantic_model_id,
+                        table_name,
+                        "table",
+                        tbl,
+                        None,
+                    ))
+
+                # Dependencias tipo "column"
+                for tbl, cols in sorted(deps.columns.items()):
+                    for col in sorted(cols):
+                        rows_to_insert.append((
+                            semantic_model_id,
+                            table_name,
+                            "column",
+                            col,
+                            tbl,
+                        ))
+
+                # Dependencias tipo "measure"
+                for mref in sorted(deps.measures):
+                    rows_to_insert.append((
+                        semantic_model_id,
+                        table_name,
+                        "measure",
+                        mref,
+                        None,
+                    ))
+
+            # Insertar en batch
+            if rows_to_insert:
+                conn.executemany(
+                    "INSERT INTO semantic_model_calculatedTable_dependencies "
+                    "(semantic_model_id, calculated_table_name, "
+                    " dependency_type, referenced_name, referenced_table) "
+                    "VALUES (?, ?, ?, ?, ?)",
                     rows_to_insert,
                 )
 
