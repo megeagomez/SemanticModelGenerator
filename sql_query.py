@@ -33,7 +33,7 @@ def print_table(rows, headers=None):
 def interactive_mode(db_path):
     """Modo interactivo para ejecutar queries"""
     try:
-        conn = duckdb.connect(db_path)
+        conn = duckdb.connect(db_path,True)
         print(f"✅ Conectado a: {db_path}")
         print("Escribe 'quit()' o 'exit()' para salir.\n")
         

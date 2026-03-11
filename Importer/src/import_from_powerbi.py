@@ -472,10 +472,28 @@ class PowerBIImporter:
         # Analizar dependencias DAX de cada modelo semántico
         logger.info(f"🔍 Analizando dependencias DAX de medidas...")
         try:
-            tk, measure_table_map = DaxTokenizer.from_duckdb(db_path, conn=conn)
-            inserted = tk.save_dependencies_to_db(db_path, measure_table_map=measure_table_map, conn=conn)
-            logger.info(f"✅ Dependencias DAX guardadas: {inserted} filas")
-            print(f"📊 Dependencias DAX: {inserted} filas guardadas")
+            # Get all semantic models
+            all_models = conn.execute(
+                "SELECT DISTINCT id, name FROM semantic_model ORDER BY id"
+            ).fetchall()
+            
+            total_inserted = 0
+            for model_id, model_name in all_models:
+                try:
+                    tk, measure_table_map = DaxTokenizer.from_duckdb(
+                        db_path, semantic_model_id=model_id, conn=conn
+                    )
+                    inserted = tk.save_dependencies_to_db(
+                        db_path, semantic_model_id=model_id, 
+                        measure_table_map=measure_table_map, conn=conn
+                    )
+                    total_inserted += inserted
+                    logger.info(f"  ✅ {model_name}: {inserted} dependencias")
+                except Exception as model_err:
+                    logger.warning(f"  ⚠️ {model_name}: {model_err}")
+                    
+            logger.info(f"✅ Dependencias DAX guardadas: {total_inserted} filas totales")
+            print(f"📊 Dependencias DAX: {total_inserted} filas guardadas en {len(all_models)} modelos")
         except Exception as e:
             logger.error(f"❌ Error analizando dependencias DAX: {e}")
             print(f"⚠️ Error analizando dependencias DAX: {e}")

@@ -1,12 +1,22 @@
 import sys
 import os
+import argparse
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from models.semantic_model import SemanticModel
 
 if __name__ == "__main__":
-    db_path = r"D:\Modelos\toyotamodels.duckdb"
-    semantic_model_dir = r"D:\Modelos\TES - CONCESIONARIOS\TES - Gestión Comercial.SemanticModel"
-    subset_name = "TES_GestionComercial_minimomeg.SemanticModel"
+    parser = argparse.ArgumentParser(description="Generate minimal subset model")
+    parser.add_argument("--db-path", default=r"D:\Modelos\toyotamodels.duckdb", 
+                        help="Path to DuckDB database")
+    parser.add_argument("--semantic-model-dir", default=r"D:\Modelos\TES - CONCESIONARIOS\TES - Gestión Comercial.SemanticModel",
+                        help="Path to semantic model directory")
+    parser.add_argument("--subset-name", default="TES_GestionComercial_minimomeg.SemanticModel",
+                        help="Name for the subset model")
+    args = parser.parse_args()
+    
+    db_path = args.db_path
+    semantic_model_dir = args.semantic_model_dir
+    subset_name = args.subset_name
 
     # Cargar el modelo base desde disco
     model = SemanticModel(semantic_model_dir)
