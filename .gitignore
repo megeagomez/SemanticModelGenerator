@@ -64,3 +64,9 @@ Modelos/*
 # Archivos temporales
 *.tmp
 *.bak
+
+# Tokens y caché de autenticación
+fabric_token_cache.json
+
+# Archivos zip temporales
+rerpoting.zip
