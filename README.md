@@ -1,226 +1,367 @@
-# Power BI Semantic Model Management Library
+# Power BI Semantic Model & Report Management
 
----
-
-## 🦆 Integración con DuckDB (rama mcpconduckdb)
-
-En esta rama, la base de datos DuckDB se utiliza como **fuente central de información** para el análisis y gestión de dependencias en modelos y reportes de Power BI. Casi todas las operaciones del MCP se basan en los datos almacenados en DuckDB, lo que permite:
-
-- Parsear y guardar información de **visuales** de reportes (tipo, campos usados, posición, etc.)
-- Almacenar detalles de **modelos semánticos**, incluyendo tablas, columnas, relaciones y medidas
-- Registrar el uso de columnas y medidas en cada visual y reporte
-- Consultar rápidamente dependencias entre reportes, tablas y columnas
-- Optimizar la detección de elementos no utilizados y la generación de submodelos
-
-**La idea principal:**
-
-> Toda la lógica de análisis de dependencias y optimización de modelos/reportes se apoya en la información estructurada y consultable de DuckDB, en vez de recorrer archivos y carpetas cada vez.
-
-Esto permite mayor velocidad, consultas complejas y una base sólida para futuras automatizaciones.
+> Administra, analiza y optimiza tus modelos semánticos y reportes de Power BI desde VS Code, Claude Desktop o línea de comandos.
 
 **Español | [English](README_EN.md)**
 
 ---
 
+## 🎯 ¿Qué hace esta herramienta?
 
+Esta herramienta te permite trabajar con tus modelos y reportes de Power BI de forma programática, sin necesidad de abrir Power BI Desktop. Ofrece tres capacidades principales:
 
-## 📝 Flujo recomendado de trabajo con MCP
+### 1. 🔌 Servidor MCP (Model Context Protocol)
+Integración directa con **GitHub Copilot** y **Claude Desktop** para interactuar con tus modelos y reportes usando lenguaje natural:
+- "¿Qué tablas tiene mi modelo AdventureWorks?"
+- "Muéstrame todas las columnas que usa el reporte de ventas"
+- "Crea un submodelo con solo las tablas que necesita este informe"
+- "Genera la documentación HTML de todos mis reportes"
 
-Puedes trabajar con MCP de dos formas: **desde Python** o **desde línea de comandos**. Ambos métodos permiten importar, consultar, analizar y generar modelos de Power BI de forma eficiente.
+### 2. 📦 Descarga de Workspaces completos desde Power BI
+**Sin limitaciones de tiempo ni consumo de tokens de API**:
+- Descarga workspaces completos sin timeouts (ideal para workspaces grandes)
+- Procesa modelos y reportes uno por uno sin límites de llamadas API
+- Almacena toda la información en DuckDB para análisis posteriores
+- Evita la necesidad de descargar archivos `.pbix` manualmente
+
+### 3. 🧰 Conjunto completo de herramientas para análisis y optimización
+- **Análisis de dependencias**: Qué tablas/columnas/medidas usa cada reporte
+- **Generación de submodelos**: Crea modelos optimizados con solo lo que necesitas
+- **Documentación automática**: Genera documentación HTML profesional de tus reportes
+- **Visualización**: Genera mockups SVG de las páginas de tus reportes
+- **Consultas SQL**: Accede a toda la metadata con consultas DuckDB
 
 ---
 
-### 1. Usando Python
+## 🚀 Casos de uso
 
-#### 1.1 Importar workspaces desde Power BI
-```python
-from Importer.src.import_from_powerbi import import_from_powerbi
-import_from_powerbi(
-    workspace_name="DemoADN",
-    db_path="D:/globalai/datosglobalai.duckdb",
-    destination_path="D:/globalai"
-)
+### 📊 Documenta automáticamente tus reportes
+```
+Genera la documentación completa de todos mis reportes en HTML
+```
+El sistema creará documentos HTML detallados con:
+- Estructura de páginas y visuales
+- Mockups SVG de cada página
+- Tablas, columnas y métricas utilizadas
+- Código DAX de las medidas
+- Código M de las fuentes de datos
+
+### 🔍 Identifica qué elementos están en uso
+```
+Analiza el uso del modelo "Sales" y dime qué columnas no están siendo utilizadas
+```
+Útil para:
+- Limpiar modelos grandes
+- Reducir el tamaño de los datasets
+- Identificar elementos obsoletos
+
+### ⚡ Optimiza modelos grandes
+```
+Crea un submodelo llamado "Sales_Light" con solo las tablas que usa el reporte "Dashboard Ejecutivo"
+```
+Beneficios:
+- Modelos más pequeños y rápidos
+- Menor consumo de memoria
+- Mejor rendimiento en Power BI Service
+
+### 🔄 Descarga workspaces sin límites
+```bash
+python Importer/src/import_from_powerbi.py --workspace "Producción" --dest "D:/data"
+```
+Ventajas:
+- Sin timeouts por workspaces grandes
+- Procesamiento secuencial sin límites de API
+- Toda la información guardada en DuckDB local
+
+---
+
+## 📋 Inventario completo de herramientas MCP
+
+### 🔐 Autenticación Power BI
+| Herramienta | Descripción |
+|------------|-------------|
+| `powerbi_login_interactive` | Inicia sesión en Power BI (device code flow) |
+| `powerbi_check_auth_status` | Verifica el estado de autenticación |
+| `powerbi_logout` | Cierra sesión y borra tokens |
+
+### 📂 Gestión de Workspaces
+| Herramienta | Descripción |
+|------------|-------------|
+| `powerbi_list_workspaces` | Lista todos tus workspaces |
+| `powerbi_list_reports` | Lista reportes de un workspace |
+| `powerbi_list_semantic_models` | Lista modelos semánticos de un workspace |
+| `powerbi_download_workspace` | **Descarga completa de un workspace** (sin timeouts) |
+
+### 🗂️ Análisis de Modelos
+| Herramienta | Descripción |
+|------------|-------------|
+| `get_model_info` | Información detallada de un modelo (tablas, relaciones, culturas) |
+| `get_table_details` | Detalles de una tabla específica (columnas, medidas, particiones) |
+| `analyze_model_usage` | Qué elementos del modelo se usan en reportes |
+| `analyze_model_usage_bd` | Análisis avanzado usando DuckDB |
+
+### 📄 Análisis de Reportes
+| Herramienta | Descripción |
+|------------|-------------|
+| `analyze_report` | Extrae todas las referencias a tablas/columnas de un reporte |
+| `get_report_pages` | Lista páginas de un reporte con sus visuales |
+| `get_page_visuals` | Obtiene visuales de una página específica |
+| `generate_report_svg` | Genera mockup SVG de una página |
+| `generate_report_documentation` | **Genera documentación HTML completa** (con SVG, DAX, M, etc.) |
+
+### 🛠️ Creación y Optimización
+| Herramienta | Descripción |
+|------------|-------------|
+| `create_subset_model` | Crea un submodelo con tablas específicas y sus relaciones |
+| `create_model_from_reports` | **Modelo optimizado con SOLO lo usado en reportes específicos** |
+
+### 💾 Base de Datos DuckDB
+| Herramienta | Descripción |
+|------------|-------------|
+| `default_db` | Establece la base de datos DuckDB por defecto |
+| `querydb` | Ejecuta consultas SQL en DuckDB |
+
+### ⚙️ Configuración
+| Herramienta | Descripción |
+|------------|-------------|
+| `set_models_path` | Cambia el directorio base de modelos y reportes |
+
+---
+
+## 🦆 Arquitectura: DuckDB como fuente central
+
+Esta herramienta utiliza **DuckDB** como base de datos central para almacenar y consultar toda la metadata de tus modelos y reportes:
+
+- ✅ **Análisis rápidos**: Sin necesidad de parsear archivos cada vez
+- ✅ **Consultas SQL complejas**: Usa SQL estándar para análisis avanzados
+- ✅ **Sin límites de API**: Toda la información local
+- ✅ **Trazabilidad completa**: Historial de cambios y versiones
+
+**Tablas principales en DuckDB:**
+- `report`: Información de reportes
+- `report_page`: Páginas de cada reporte
+- `report_visual`: Visuales y su configuración
+- `report_column_used`: Columnas usadas por cada visual
+- `report_measure_used`: Medidas usadas por cada visual
+- `semantic_model`: Modelos semánticos
+- `model_table`: Tablas de cada modelo
+- `model_column`: Columnas de cada tabla
+- `model_measure`: Medidas DAX
+- `model_relationship`: Relaciones entre tablas
+
+---
+
+## 📝 Flujo recomendado de trabajo
+
+### Opción A: Usando MCP con Copilot/Claude (Recomendado)
+
+**1. Configura el servidor MCP** (ver sección de instalación abajo)
+
+**2. Descarga un workspace desde Power BI:**
+```
+Descarga el workspace "Producción" a la carpeta D:/data
 ```
 
-#### 1.2 Consultar y documentar modelos y reportes
+**3. Analiza y documenta:**
+```
+Genera la documentación completa de todos los reportes del workspace
+```
+
+**4. Optimiza modelos:**
+```
+Crea un submodelo del modelo "Sales" que solo incluya las tablas usadas en el reporte "Dashboard Ejecutivo"
+```
+
+**5. Consulta directamente la metadata:**
+```
+Muéstrame todas las medidas DAX que contienen la palabra "Profit"
+```
+
+### Opción B: Usando línea de comandos
+
+**1. Descarga workspace desde Power BI:**
+```bash
+python Importer/src/import_from_powerbi.py --workspace "Producción" --dest "D:/data" --db "powerbi.duckdb"
+```
+
+**2. Genera documentación de reportes:**
+```bash
+python scripts/documenta_report.py --report "Dashboard Ejecutivo" --db "D:/data/powerbi.duckdb"
+```
+
+**3. Consulta la base de datos:**
+```bash
+python sql_query.py --query "SELECT * FROM report WHERE report_name LIKE '%Sales%'"
+```
+
+### Opción C: Usando Python directamente
+
 ```python
+from Importer.src.import_from_powerbi import import_from_powerbi
+
+# Descarga workspace
+import_from_powerbi(
+    workspace_name="Producción",
+    db_path="D:/data/powerbi.duckdb",
+    destination_path="D:/data"
+)
+
+# Consulta modelos y reportes
 from models import SemanticModel, clsReport
-from pathlib import Path
-model = SemanticModel("D:/globalai/DemoADN/semanticAdventureworks.SemanticModel")
-model.load_from_directory(Path("D:/globalai/DemoADN/semanticAdventureworks.SemanticModel"))
-report = clsReport("D:/globalai/beacicd/informe 1.Report")
+model = SemanticModel("D:/data/Producción/Sales.SemanticModel")
+model.load_from_directory(...)
+
+report = clsReport("D:/data/Producción/Dashboard.Report")
 columns_used = report.get_all_columns_used()
 ```
 
-#### 1.3 Crear mockups, analizar uso de campos y linaje
-```python
-visuals = report.get_visuals()
-usage = report.get_field_usage_summary()
-linaje = report.get_model_lineage()
-```
-
-#### 1.4 Generar nuevos modelos según necesidades de informes
-```python
-subset = model.create_subset_model(
-    table_specs=list(columns_used.keys()),
-    subset_name="OptimizedModel.SemanticModel",
-    recursive=False
-)
-subset.save_to_directory(Path("D:/globalai/DemoADN/OptimizedModel.SemanticModel"))
-```
-
 ---
 
-### 2. Usando línea de comandos
+## ⚙️ Instalación y configuración
 
-#### 2.1 Importar workspaces desde Power BI
+### Requisitos previos
+- Python 3.8 o superior
+- Visual Studio Code (para usar con Copilot) o Claude Desktop
+
+### 1. Instala las dependencias
+
 ```bash
-python Importer/src/import_from_powerbi.py --workspace "DemoADN" --db "D:/globalai/datosglobalai.duckdb" --dest "D:/globalai"
+pip install -r requirements.txt
 ```
 
-#### 2.2 Consultar y documentar modelos y reportes
-```bash
-python scripts/inspect_model.py --model "D:/globalai/DemoADN/semanticAdventureworks.SemanticModel"
-python scripts/inspect_report.py --report "D:/globalai/beacicd/informe 1.Report"
-```
+### 2. Configura el servidor MCP
 
+#### Para GitHub Copilot en VS Code:
 
-#### 2.3 Generar nuevos modelos según necesidades de informes
-```bash
-python scripts/create_subset_model.py --model "D:/globalai/DemoADN/semanticAdventureworks.SemanticModel" --columns-used "columns_used.json" --output "D:/globalai/DemoADN/OptimizedModel.SemanticModel"
-```
-
----
-
----
-
-## 🔧 Configuración del MCP en VS Code con GitHub Copilot
-
-Para usar el MCP directamente desde VS Code con GitHub Copilot, necesitas configurar el archivo JSON del servidor MCP.
-
-### 1. Archivos de configuración
-
-El MCP utiliza dos archivos JSON principales:
-
-#### a) Configuración del servidor MCP para Claude Desktop
-
-**Ubicación según sistema:**
-- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
-- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Linux**: `~/.config/Claude/claude_desktop_config.json`
-
-**Contenido:**
-```json
-{
-  "mcpServers": {
-    "powerbi-semantic-model": {
-      "command": "D:\\Python apps\\pyconstelaciones + Reports\\.venv\\Scripts\\python.exe",
-      "args": ["D:\\Python apps\\pyconstelaciones + Reports\\mcp_server.py"]
-    }
-  }
-}
-```
-
-#### b) Configuración para VS Code (extensión GitHub Copilot)
-
-Si usas VS Code con Copilot, adiciona la configuración en **settings.json** de VS Code:
+Agrega en tu `settings.json` de VS Code (`Ctrl+Shift+P` → "Preferences: Open User Settings (JSON)"):
 
 ```json
 {
   "github.copilot.mcp.servers": {
     "powerbi-semantic-model": {
       "command": "python",
-      "args": ["D:\\Python apps\\pyconstelaciones + Reports\\mcp_server.py"],
-      "cwd": "D:\\Python apps\\pyconstelaciones + Reports"
+      "args": ["RUTA_COMPLETA/mcp_server.py"],
+      "cwd": "RUTA_COMPLETA"
     }
   }
 }
 ```
 
-### 2. Steps de configuración
+Reemplaza `RUTA_COMPLETA` con la ruta a este proyecto.
 
-1. **Abre el archivo de configuración**
-   - En VS Code: `Ctrl+Shift+P` → "Preferences: Open User Settings (JSON)"
-   - En Claude Desktop: Abre el archivo según tu sistema (ver ubicación arriba)
+#### Para Claude Desktop:
 
-2. **Copia la configuración** correspondiente a tu herramienta
+Edita el archivo de configuración según tu sistema:
 
-3. **Actualiza las rutas** si tu proyecto está en una ubicación diferente:
-   ```
-   "D:\\Python apps\\pyconstelaciones + Reports" → tu-ruta-del-proyecto
-   ```
-
-4. **Reinicia la aplicación** (VS Code o Claude Desktop)
-
-5. **Comprueba la conexión** escribiendo un prompt en Copilot:
-   ```
-   "Qué modelos semánticos tengo cargados?"
-   ```
-
-### 3. Configuración de rutas de datos (opcional)
-
-Si quieres cambiar la ruta por defecto donde se guardan las bases de datos DuckDB:
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Linux**: `~/.config/Claude/claude_desktop_config.json`
 
 ```json
 {
   "mcpServers": {
     "powerbi-semantic-model": {
-      "command": "...",
-      "args": ["..."],
-      "env": {
-        "MCP_DATA_PATH": "D:/mi-ruta-custom/mcpdata"
-      }
+      "command": "python",
+      "args": ["RUTA_COMPLETA/mcp_server.py"]
     }
   }
 }
 ```
 
-### 4. Troubleshooting
+### 3. Reinicia la aplicación (VS Code o Claude Desktop)
 
-Si el MCP no conecta:
+### 4. Prueba la conexión
 
-1. **Verifica la ruta del Python venv** (debe existir el archivo)
-2. **Comprueba que `mcp_server.py` existe** en el directorio
-3. **Reinicia completamente** la aplicación (no solo reload)
-4. **Revisa los logs** en Claude Desktop (últimaa pestanya de las herramientas)
+En Copilot o Claude, escribe:
+```
+Lista los modelos semánticos disponibles
+```
+
+Si funciona, ¡ya estás listo!
 
 ---
 
-Biblioteca de Python para manipular modelos semánticos de Power BI (archivos `.SemanticModel` y `.Report`) de forma programática.
+## 💡 Ejemplos de uso con lenguaje natural
 
-## 🚀 Características
+Una vez configurado el MCP, puedes usar comandos como:
 
-- **Carga y guardado** de modelos semánticos completos
-- **Creación de submodelos** con filtrado inteligente de tablas y relaciones
-- **Filtrado de elementos** (columnas, medidas, jerarquías) con modos include/exclude
-- **Análisis de reportes** (.Report) para extraer columnas y medidas usadas
-  - ✅ **Soporte Dual de Formatos:** PBIR (nuevo) y Legacy (antiguo)
-- **Generación de SVG** de páginas de reportes con visuales
-- **Preservación de metadatos** y propiedades originales
-- **Soporte para TMDL** (formato de definición de modelos tabulares)
-- **Integración con Claude Desktop** vía servidor MCP
+### Exploración
+- "Lista todos los workspaces de Power BI"
+- "¿Qué reportes hay en el workspace 'Ventas'?"
+- "Muéstrame la estructura del modelo 'AdventureWorks'"
 
-## 📦 Instalación
+### Análisis
+- "¿Qué columnas usa el reporte 'Dashboard Ejecutivo'?"
+- "Analiza el uso del modelo 'Sales' y dime qué no se está usando"
+- "Muéstrame todas las medidas que usan la tabla 'Calendar'"
 
-```bash
-# Clonar el repositorio
-git clone https://github.com/megeagomez/SemanticModelGenerator.git
-cd "pyconstelaciones + Reports"
+### Creación
+- "Crea un submodelo llamado 'Sales_Light' con solo las tablas: Customer, Sales, Product"
+- "Genera un modelo optimizado basado en el reporte 'KPIs Mensuales'"
 
-# Crear entorno virtual
-python -m venv .venv
+### Documentación
+- "Genera la documentación HTML del reporte 'Dashboard Ejecutivo'"
+- "Crea un mockup SVG de la primera página del reporte 'Ventas'"
 
-# Activar entorno virtual
-# Windows PowerShell:
-.\.venv\Scripts\Activate.ps1
-# Windows CMD:
-.\.venv\Scripts\activate.bat
-# Linux/Mac:
-source .venv/bin/activate
+### Consultas avanzadas
+- "Ejecuta una consulta SQL: SELECT table_name, COUNT(*) as col_count FROM model_column GROUP BY table_name"
+- "¿Cuántas medidas DAX hay en total?"
 
-# Instalar dependencias (si las hay)
-# pip install -r requirements.txt
+---
+
+## 🔧 Solución de problemas
+
+### El MCP no se conecta
+1. Verifica que la ruta en la configuración sea absoluta
+2. Asegúrate de que `mcp_server.py` existe en esa ubicación
+3. Reinicia completamente la aplicación (no solo recargar)
+4. Revisa los logs en Claude Desktop o la consola de VS Code
+
+### Errores de autenticación con Power BI
 ```
+Cierra la sesión de Power BI y vuelve a iniciar sesión
+```
+
+### El workspace tarda mucho en descargarse
+Esto es normal para workspaces grandes. La ventaja de esta herramienta es que NO tiene timeouts. Deja que termine el proceso.
+
+---
+
+## 📚 Documentación adicional
+
+Para más información técnica, consulta:
+
+- [Documentación de la API MCP](Documentation/MCP_SERVER.md)
+- [Formato PBIR y Legacy](Documentation/DUAL_FORMAT_SUPPORT.md)
+- [Historial de cambios](Documentation/CHANGELOG.md)
+- [Guía de configuración detallada](Documentation/SETUP_MCP_COPILOT.md)
+
+---
+
+## 🤝 Contribuciones
+
+Las contribuciones son bienvenidas. Por favor:
+1. Haz un fork del proyecto
+2. Crea una rama para tu feature (`git checkout -b feature/AmazingFeature`)
+3. Commit tus cambios (`git commit -m 'Add some AmazingFeature'`)
+4. Push a la rama (`git push origin feature/AmazingFeature`)
+5. Abre un Pull Request
+
+---
+
+## 📄 Licencia
+
+Este proyecto está bajo licencia MIT. Ver el archivo `LICENSE` para más detalles.
+
+---
+
+## 👥 Autor
+
+Miguel Egea - [@megeagomez](https://github.com/megeagomez)
+
+---
+
+**¿Preguntas o problemas?** Abre un [issue](https://github.com/megeagomez/SemanticModelGenerator/issues) en GitHub.
 
 ## ⚙️ Configuración del MCP Server
 
